@@ -1,0 +1,17 @@
+[package]
+name = "axodendron-core"
+description = "Format-independent neuronal arbor parsing, validation, analysis, and transformation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+ciborium.workspace = true
+swc-neuron = { version = "0.5.3", default-features = false }

@@ -1,0 +1,20 @@
+[package]
+name = "axodendron-typst-plugin"
+description = "Versioned pure-WASM protocol boundary for the Axodendron Typst package"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+axodendron-core.workspace = true
+axodendron-svg.workspace = true
+ciborium.workspace = true
+serde.workspace = true
+wasm-minimal-protocol.workspace = true

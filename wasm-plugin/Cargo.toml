@@ -1,0 +1,29 @@
+[workspace]
+members = [
+  "crates/axodendron-core",
+  "crates/axodendron-svg",
+  "crates/axodendron-typst-plugin",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Eito Yoneyama"]
+license = "MIT"
+repository = "https://github.com/rice8y/axodendron"
+rust-version = "1.85"
+
+[workspace.dependencies]
+axodendron-core = { path = "crates/axodendron-core" }
+axodendron-svg = { path = "crates/axodendron-svg" }
+ciborium = "0.2.2"
+serde = { version = "1.0.228", features = ["derive"] }
+wasm-minimal-protocol = "0.2.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
