@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: ${{ matrix.toolchain }}
-      - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked --workspace --all-targets
+      - run: cargo +${{ matrix.toolchain }} test --manifest-path wasm-plugin/Cargo.toml --locked --workspace --all-targets
 
   quality:
     name: Quality, WASM, and Typst package
@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          toolchain: stable
+          toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
@@ -74,7 +74,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          toolchain: stable
+          toolchain: 1.97.1
       - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
         with:
           typst-version: 0.15.0

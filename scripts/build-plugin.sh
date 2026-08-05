@@ -7,6 +7,13 @@ manifest="$repository_dir/wasm-plugin/Cargo.toml"
 cargo_bin=$(command -v cargo)
 cargo_home=$(CDPATH= cd -- "$(dirname -- "$cargo_bin")/.." && pwd)
 target_dir=${AXODENDRON_TARGET_DIR:-"$repository_dir/target"}
+expected_rust=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$repository_dir/rust-toolchain.toml")
+actual_rust=$(rustc --version | awk '{ print $2 }')
+
+if [ -z "$expected_rust" ] || [ "$actual_rust" != "$expected_rust" ]; then
+  printf 'plugin.wasm requires Rust %s, found %s\n' "$expected_rust" "$actual_rust" >&2
+  exit 1
+fi
 
 remap_flags="--remap-path-prefix=$repository_dir=/workspace --remap-path-prefix=$cargo_home=/cargo"
 if [ -n "${RUSTFLAGS:-}" ]; then
