@@ -1,0 +1,8 @@
+/target/
+/wasm-plugin/target/
+/.typst-cache/
+*.pdf
+*.png
+*.svg
+!package/docs/documentation.pdf
+!package/images/*.png
