@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Rust ${{ matrix.toolchain }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            toolchain: 1.85.0
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: macos-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked --workspace --all-targets
+
+  quality:
+    name: Quality, WASM, and Typst package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
+        with:
+          typst-versions-yaml: |
+            typst-min:
+              version: 0.14.0
+            typst-latest:
+              version: latest
+      - run: cargo install wasm-tools --locked --version 1.245.1
+      - run: TYPST_BIN=typst-min AXODENDRON_BENCH_FULL=1 ./scripts/check.sh
+      - run: git diff --exit-code -- package/plugin.wasm
+      - run: TYPST_BIN=typst-latest ./scripts/check-package.sh
+      - run: typst-latest compile --root . package/tests/smoke.typ /tmp/axodendron-smoke-latest.pdf
+
+  neuromorpho:
+    name: Private NeuroMorpho regression
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
+        with:
+          typst-version: 0.15.0
+      - run: ./scripts/fetch-neuromorpho-fixtures.sh
+      - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked -p axodendron-core --test neuromorpho -- --ignored
+      - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked -p axodendron-svg --test neuromorpho_render -- --ignored
+      - run: typst compile --root . package/tests/neuromorpho.typ /tmp/axodendron-neuromorpho.pdf

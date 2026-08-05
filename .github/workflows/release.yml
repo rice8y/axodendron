@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify release sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: wasm-plugin
+
+      - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
+        with:
+          typst-versions-yaml: |
+            typst-min:
+              version: 0.14.0
+            typst-latest:
+              version: latest
+
+      - name: Match tag to package and WASM versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' package/typst.toml)"
+          wasm_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' wasm-plugin/Cargo.toml)"
+
+          test -n "$package_version"
+          test -n "$wasm_version"
+          test "$package_version" = "$wasm_version"
+          test "v${package_version}" = "$GITHUB_REF_NAME"
+          grep -Fq "Axodendron ${package_version}" package/lib.typ
+
+      - name: Install WASM validation tools
+        run: cargo install wasm-tools --locked --version 1.245.1
+
+      - name: Verify minimum-version release sources
+        run: TYPST_BIN=typst-min AXODENDRON_BENCH_FULL=1 ./scripts/check.sh
+
+      - name: Verify committed WASM is reproducible
+        run: git diff --exit-code -- package/plugin.wasm
+
+      - name: Verify package with latest Typst
+        run: TYPST_BIN=typst-latest ./scripts/check-package.sh
+
+      - name: Verify latest-Typst smoke test
+        run: typst-latest compile --root . package/tests/smoke.typ /tmp/axodendron-smoke-latest.pdf
+
+  typst-package:
+    name: Package release assets
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: typst-community/setup-typst@63ac138db421d586de61f7f5ac3bcef6a2e6c78c # v5.1.0
+        with:
+          typst-versions-yaml: |
+            typst-docs:
+              version: 0.14.2
+
+      - name: Compile manual
+        working-directory: package
+        run: typst-docs compile --root .. docs/documentation.typ
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' package/typst.toml)"
+          test -n "$package_version"
+          test "v${package_version}" = "$GITHUB_REF_NAME"
+
+          mkdir -p release-assets typst-dist/axodendron wasm-dist/axodendron-wasm-plugin
+          cp -a package/. typst-dist/axodendron/
+          cp package/plugin.wasm LICENSE package/THIRD_PARTY_NOTICES.md wasm-dist/axodendron-wasm-plugin/
+
+          test -f typst-dist/axodendron/docs/documentation.pdf
+          test -f wasm-dist/axodendron-wasm-plugin/plugin.wasm
+
+          (
+            cd typst-dist
+            zip -qr "../release-assets/axodendron-typst-${package_version}.zip" axodendron
+          )
+
+          (
+            cd wasm-dist
+            zip -qr "../release-assets/axodendron-wasm-plugin-${package_version}.zip" axodendron-wasm-plugin
+          )
+
+          cp package/docs/documentation.pdf "release-assets/axodendron-manual-${package_version}.pdf"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub release
+    needs: typst-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum -- * > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi
