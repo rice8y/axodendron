@@ -1,6 +1,6 @@
 # Axodendron
 
-Axodendron validates, analyzes, transforms, and renders neuronal morphologies from SWC data inside Typst. Deterministic Rust code runs through a pure WebAssembly plugin, while Typst handles document layout and optional native annotations.
+Axodendron validates, analyzes, transforms, and renders neuronal morphologies from SWC data inside Typst. It provides publication-ready morphology figures, quantitative measurements, and document-native annotations through a concise Typst API.
 
 ![Three real neuronal morphologies rendered by Axodendron](package/images/readme-overview.png)
 
