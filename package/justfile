@@ -1,0 +1,74 @@
+TOML_FILE := "typst.toml"
+
+get_value_from_toml key:
+  #!/bin/bash
+  grep "{{key}}" {{TOML_FILE}} | sed -E 's/.*= "(.*)"/\1/'
+
+get_local_package_dir:
+  #!/bin/bash
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    echo "$HOME/Library/Application Support/typst/packages"
+  elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    echo "${XDG_DATA_HOME:-$HOME/.local/share}/typst/packages"
+  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
+    # Windows
+    echo "$APPDATA/typst/packages"
+  else
+    echo "Unsupported OS"
+    exit 1
+  fi
+
+install:
+  #!/bin/bash
+  if ! command -v typst &> /dev/null; then
+    echo "Error: Typst is not installed. Please install it before running this recipe."
+    exit 1
+  fi
+
+  PACKAGE_NAME=$(just get_value_from_toml name)
+  PACKAGE_VERSION=$(just get_value_from_toml version)
+  LOCAL_PACKAGE_DIR=$(just get_local_package_dir)
+  TARGET_DIR="$LOCAL_PACKAGE_DIR/local/$PACKAGE_NAME/$PACKAGE_VERSION"
+
+  mkdir -p "$TARGET_DIR"
+
+  echo "Copying files to $TARGET_DIR..."
+
+  cp {{TOML_FILE}} "$TARGET_DIR"
+
+  cp *.typ "$TARGET_DIR"
+
+  if [ -f "plugin.wasm" ]; then
+    cp plugin.wasm "$TARGET_DIR"
+  else
+    echo "Warning: plugin.wasm not found in current directory."
+    exit 1
+  fi
+
+  [ -f "README.md" ] && cp README.md "$TARGET_DIR"
+  [ -f "LICENSE" ] && cp LICENSE "$TARGET_DIR"
+  [ -f "THIRD_PARTY_NOTICES.md" ] && cp THIRD_PARTY_NOTICES.md "$TARGET_DIR"
+  mkdir -p "$TARGET_DIR/docs" "$TARGET_DIR/examples"
+  [ -d "docs" ] && cp -R docs/. "$TARGET_DIR/docs"
+  [ -d "examples" ] && cp -R examples/. "$TARGET_DIR/examples"
+
+  echo "Package $PACKAGE_NAME version $PACKAGE_VERSION has been installed."
+
+clean:
+  #!/bin/bash
+  PACKAGE_NAME=$(just get_value_from_toml name)
+  PACKAGE_VERSION=$(just get_value_from_toml version)
+  LOCAL_PACKAGE_DIR=$(just get_local_package_dir)
+  TARGET_DIR="$LOCAL_PACKAGE_DIR/local/$PACKAGE_NAME/$PACKAGE_VERSION"
+
+  if [ -d "$TARGET_DIR" ]; then
+    rm -rf "$TARGET_DIR"
+    echo "Directory $TARGET_DIR has been removed."
+  else
+    echo "Directory $TARGET_DIR does not exist."
+  fi
+
+docs: # Typst 0.14.2
+  nix shell github:NixOS/nixpkgs/1412caf7bf9e660f2f962917c14b1ea1c3bc695e#typst -c typst c --root .. docs/documentation.typ
