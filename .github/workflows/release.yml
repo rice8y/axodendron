@@ -164,3 +164,46 @@ jobs:
               --generate-notes \
               --title "$GITHUB_REF_NAME"
           fi
+
+  deploy-docs:
+    name: Deploy documentation
+    needs: github-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Verify Vercel credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for name in VERCEL_ORG_ID VERCEL_PROJECT_ID VERCEL_TOKEN; do
+            if [[ -z "${!name}" ]]; then
+              printf '::error::Missing repository secret %s\n' "$name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@58.5.1
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token "$VERCEL_TOKEN"
+
+      - name: Build documentation
+        run: vercel build --prod --token "$VERCEL_TOKEN"
+
+      - name: Deploy documentation
+        run: vercel deploy --prebuilt --prod --token "$VERCEL_TOKEN"
