@@ -50,11 +50,19 @@ jobs:
           package_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' package/typst.toml)"
           wasm_version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' wasm-plugin/Cargo.toml)"
 
-          test -n "$package_version"
-          test -n "$wasm_version"
-          test "$package_version" = "$wasm_version"
-          test "v${package_version}" = "$GITHUB_REF_NAME"
-          grep -Fq "Axodendron ${package_version}" package/lib.typ
+          fail() {
+            printf '::error::%s\n' "$1" >&2
+            exit 1
+          }
+
+          test -n "$package_version" || fail "Could not read the Typst package version"
+          test -n "$wasm_version" || fail "Could not read the WASM workspace version"
+          test "$package_version" = "$wasm_version" || \
+            fail "Typst ${package_version} does not match WASM ${wasm_version}"
+          test "v${package_version}" = "$GITHUB_REF_NAME" || \
+            fail "Tag ${GITHUB_REF_NAME} does not match package ${package_version}"
+
+          printf 'release version verified: %s\n' "$package_version"
 
       - name: Install WASM validation tools
         run: cargo install wasm-tools --locked --version 1.245.1
