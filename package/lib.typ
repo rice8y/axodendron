@@ -1,4 +1,9 @@
-// Axodendron 0.1.0 — deterministic SWC analysis and vector rendering for Typst.
+/// Axodendron validates, analyzes, transforms, and renders neuronal
+/// morphologies from SWC data inside Typst.
+///
+/// Load an SWC morphology with `load`, inspect it with `analyze` or `sholl`,
+/// derive a new morphology with the transformation functions, and create
+/// publication-ready vector output with `render`.
 
 #let _api-version = 1
 #let _plugin = plugin("plugin.wasm")
@@ -137,13 +142,23 @@
 /// Geometry values remain unitless numbers in the physical unit named by
 /// `cell.units` (SWC convention: micrometres). Typst layout lengths are only
 /// used by `render`.
+///
+/// - source (any): SWC input as bytes or text, or a `path` on Typst 0.15.0 and later.
+/// - profile (str): Validation profile, either `"permissive"` or `"incf-strict"`.
+/// - fail-on-error (bool): Whether validation errors should stop evaluation.
+/// -> dictionary
 #let load(source, profile: "permissive", fail-on-error: true) = _parse-bytes(
   _source-to-bytes(source),
   profile: profile,
   fail-on-error: fail-on-error,
 )
 
-/// Parse SWC source already held in a string or bytes value.
+/// Parse and validate SWC source already held in memory.
+///
+/// - source (str, bytes): SWC source text or its byte representation.
+/// - profile (str): Validation profile, either `"permissive"` or `"incf-strict"`.
+/// - fail-on-error (bool): Whether validation errors should stop evaluation.
+/// -> dictionary
 #let from-text(source, profile: "permissive", fail-on-error: true) = _parse-bytes(
   if type(source) == bytes { source } else { bytes(source) },
   profile: profile,
@@ -151,10 +166,16 @@
 )
 
 /// Return all validation diagnostics retained by a cell.
+///
+/// - cell (dictionary): A morphology returned by `load`, `from-text`, or a transformation.
+/// -> array
 #let diagnostics(cell) = cell.at("diagnostics")
 
 /// Return retained SWC header comments and recognized descriptive fields.
 /// Metadata such as scale or shrinkage correction is never applied implicitly.
+///
+/// - cell (dictionary): A morphology returned by `load`, `from-text`, or a transformation.
+/// -> dictionary
 #let metadata(cell) = cell.at("metadata")
 
 #let _view(projection) = if type(projection) == str {
@@ -169,6 +190,11 @@
 
 /// Compute summary metrics, section decomposition, tortuosity, root path
 /// distances, and Strahler order in one WASM call.
+///
+/// - cell (dictionary): The morphology to analyze.
+/// - domain (str): Node domain included in cable metrics, typically `"neurites"`.
+/// - section-boundaries (str): Rule used to split morphology sections.
+/// -> dictionary
 #let analyze(
   cell,
   domain: "neurites",
@@ -182,6 +208,14 @@
 ))
 
 /// Exact 3D Sholl intersections. Radii and center use `cell.units`.
+///
+/// - cell (dictionary): The morphology to analyze.
+/// - radii (array): Positive Sholl radii in the morphology's physical unit.
+/// - center (none, array): Optional three-dimensional center coordinate.
+/// - center-node (none, int): Optional node ID used as the center.
+/// - domain (str): Node domain included in the intersection count.
+/// - projection (none, str, dictionary): Optional orthographic projection for two-dimensional analysis.
+/// -> dictionary
 #let sholl(
   cell,
   radii: none,
@@ -204,6 +238,14 @@
 }
 
 /// Exact 2D circle/segment Sholl intersections after physical orthographic projection.
+///
+/// - cell (dictionary): The morphology to analyze.
+/// - radii (array): Positive Sholl radii in the morphology's physical unit.
+/// - projection (str, dictionary): Named or custom orthographic projection.
+/// - center (none, array): Optional three-dimensional center coordinate.
+/// - center-node (none, int): Optional node ID used as the center.
+/// - domain (str): Node domain included in the intersection count.
+/// -> dictionary
 #let sholl-2d(
   cell,
   radii: none,
@@ -233,24 +275,41 @@
 }
 
 /// Select exactly the listed nodes as an induced forest over original edges.
+///
+/// - cell (dictionary): The source morphology.
+/// - nodes (array): Integer node IDs to retain.
+/// -> dictionary
 #let select-nodes(cell, nodes: none) = _transform(cell, (
   operation: "select-nodes",
   node_ids: _required("nodes", nodes),
 ))
 
 /// Select nodes of the listed SWC kinds without inventing bridging edges.
+///
+/// - cell (dictionary): The source morphology.
+/// - kinds (array): Integer SWC type codes to retain.
+/// -> dictionary
 #let select-kinds(cell, kinds: none) = _transform(cell, (
   operation: "select-kinds",
   kinds: _required("kinds", kinds),
 ))
 
 /// Extract a node and all of its descendants.
+///
+/// - cell (dictionary): The source morphology.
+/// - node (int): Root node ID of the extracted subtree.
+/// -> dictionary
 #let subtree(cell, node: none) = _transform(cell, (
   operation: "subtree",
   node_id: _required("node", node),
 ))
 
 /// Extract the unique undirected path between two nodes in one component.
+///
+/// - cell (dictionary): The source morphology.
+/// - start (int): Node ID at one end of the path.
+/// - end (int): Node ID at the other end of the path.
+/// -> dictionary
 #let path(cell, start: none, end: none) = _transform(cell, (
   operation: "path",
   from_id: _required("start", start),
@@ -258,18 +317,33 @@
 ))
 
 /// Reverse the parent chain so `node` becomes the root of its component.
+///
+/// - cell (dictionary): The source morphology.
+/// - node (int): Node ID that becomes the new component root.
+/// -> dictionary
 #let reroot(cell, node: none) = _transform(cell, (
   operation: "reroot",
   node_id: _required("node", node),
 ))
 
 /// Remove nodes of the listed SWC kinds and their descendant subtrees.
+///
+/// - cell (dictionary): The source morphology.
+/// - kinds (array): Integer SWC type codes whose subtrees should be removed.
+/// -> dictionary
 #let prune(cell, kinds: none) = _transform(cell, (
   operation: "drop-kinds",
   kinds: _required("kinds", kinds),
 ))
 
 /// Topology-preserving 3D Ramer–Douglas–Peucker simplification.
+///
+/// - cell (dictionary): The source morphology.
+/// - tolerance (int, float): Maximum spatial deviation in `cell.units`.
+/// - preserve-type-changes (bool): Whether nodes at SWC type transitions must be retained.
+/// - preserve-soma (bool): Whether soma nodes must be retained.
+/// - protected-nodes (array): Additional integer node IDs that must be retained.
+/// -> dictionary
 #let simplify(
   cell,
   tolerance: none,
@@ -290,6 +364,11 @@
 }
 
 /// Equal-arc-length resampling within topology- and type-bounded sections.
+///
+/// - cell (dictionary): The source morphology.
+/// - step (int, float): Positive target spacing in `cell.units`.
+/// - protected-nodes (array): Integer node IDs that must survive resampling.
+/// -> dictionary
 #let resample(cell, step: none, protected-nodes: ()) = _transform(cell, (
   operation: "resample",
   options: (
@@ -300,10 +379,18 @@
 
 /// Export deterministic SWC with topological row order and sequential IDs.
 /// Single-root cells satisfy the strict profile; forests preserve all roots.
+///
+/// - cell (dictionary): The morphology to serialize.
+/// -> str
 #let export-swc(cell) = _unwrap(_plugin.export_swc(_require-payload(cell))).at("source")
 
 /// Construct a Typst-native node label annotation. `offset.x` and `offset.y`
 /// shift the label after projection; positive values move right and down.
+///
+/// - body (content): Label content.
+/// - node (int): Node ID to annotate.
+/// - offset (dictionary): Typst `x` and `y` length offsets from the projected node.
+/// -> dictionary
 #let label(body, node: none, offset: (x: 4pt, y: -4pt)) = (
   kind: "label",
   node: _required("node", node),
@@ -312,6 +399,14 @@
 )
 
 /// Construct a node-anchored marker. If `body` is omitted, a circle is drawn.
+///
+/// - node (int): Node ID to mark.
+/// - body (none, content): Optional marker content; `none` draws a circle.
+/// - offset (dictionary): Typst `x` and `y` length offsets from the projected node.
+/// - size (length): Marker width and height.
+/// - fill (any): Circle fill accepted by Typst.
+/// - stroke (any): Circle stroke accepted by Typst.
+/// -> dictionary
 #let marker(
   node: none,
   body: none,
@@ -336,6 +431,22 @@
 /// the caller explicitly supplies one or two CeTZ Bezier `controls`. The
 /// optional white label fill prevents dense morphology geometry from showing
 /// through the text without drawing a frame.
+///
+/// - body (content): Label content.
+/// - node (int): Node ID targeted by the leader.
+/// - offset (dictionary): Typst `x` and `y` lengths from the node to the label.
+/// - via (array): Optional relative polyline vertices as `x` and `y` length dictionaries.
+/// - controls (array): Zero, one, or two relative CeTZ Bezier control points.
+/// - anchor (auto, str): Automatic or explicit CeTZ anchor for the label content.
+/// - padding (length): Non-negative padding around the label content.
+/// - fill (any): Label background fill accepted by CeTZ.
+/// - label-stroke (any): Optional label frame stroke accepted by CeTZ.
+/// - arrow-stroke (any): Leader stroke accepted by CeTZ.
+/// - arrow-fill (any): Arrowhead fill accepted by CeTZ.
+/// - mark (none, str): CeTZ end-mark name, or `none` for no arrowhead.
+/// - mark-scale (int, float): Positive CeTZ end-mark scale.
+/// - target-gap (length): Non-negative gap between the leader endpoint and target node.
+/// -> dictionary
 #let cetz-label(
   body,
   node: none,
@@ -408,6 +519,11 @@
 }
 
 /// Construct a compact categorical legend.
+///
+/// - entries (array): Legend entries containing `color` and `label` fields.
+/// - position (any): Typst alignment used to place the legend.
+/// - inset (length): Distance from the selected render edge.
+/// -> dictionary
 #let legend(entries: none, position: top + right, inset: 8pt) = (
   entries: _required("entries", entries),
   position: position,
@@ -416,6 +532,15 @@
 
 /// Construct a scalar color bar using the same named palette as the renderer.
 /// `label-gap` controls the vertical space between its label and palette strip.
+///
+/// - min (int, float): Scalar value shown at the low end of the palette.
+/// - max (int, float): Scalar value shown at the high end of the palette.
+/// - label (none, content, str): Optional color-bar label.
+/// - label-gap (length): Non-negative vertical gap below the label.
+/// - colormap (str): Named scalar palette, either `"viridis"` or `"magma"`.
+/// - position (any): Typst alignment used to place the color bar.
+/// - inset (length): Distance from the selected render edge.
+/// -> dictionary
 #let color-bar(
   min: none,
   max: none,
@@ -435,6 +560,12 @@
 )
 
 /// Construct a physical scale bar. `value` is in the morphology's units.
+///
+/// - value (int, float): Positive physical length represented by the bar.
+/// - label (none, content, str): Optional replacement for the generated unit label.
+/// - inset (length): Distance from the bottom-left render edges.
+/// - stroke (any): Scale-bar line stroke accepted by Typst.
+/// -> dictionary
 #let scale-bar(value: none, label: none, inset: 8pt, stroke: 1pt) = (
   value: _positive("value", value),
   label: label,
@@ -442,6 +573,9 @@
   stroke: stroke,
 )
 
+/// Package and plugin protocol version.
+///
+/// -> str
 #let version = str(_plugin.version())
 
 #let _color(color-by, colormap, minimum, maximum) = if color-by == "type" {
@@ -497,6 +631,10 @@
 
 /// Return one projected node from a render result. Coordinates `x` and `y`
 /// are Typst lengths measured from the render block's top-left corner.
+///
+/// - render-result (dictionary): Result of `render` with `return-report: true`.
+/// - node (int): Requested node ID included in `anchor-nodes` or an annotation.
+/// -> dictionary
 #let node-anchor(render-result, node: none) = {
   let node = _required("node", node)
   if type(render-result) != dictionary or not "node-anchors" in render-result {
@@ -580,6 +718,13 @@
 
 /// Overlay CeTZ leader labels on a completed render result. The CeTZ module is
 /// injected by the caller so Axodendron remains usable without that package.
+///
+/// - render-result (dictionary): Result of `render` with `return-report: true`.
+/// - cetz (module): Imported CeTZ module.
+/// - labels (array): Annotations returned by `cetz-label`.
+/// - length (length): Positive CeTZ canvas coordinate unit.
+/// - strict (bool): Whether a missing target node should stop evaluation.
+/// -> content
 #let cetz-annotate(
   render-result,
   cetz: none,
@@ -697,6 +842,44 @@
 /// Render a radius-aware morphology as one WASM-generated SVG, then add labels
 /// and a scale bar as native Typst content. `width` and `height` are page units;
 /// all canvas and morphology values are unitless numbers.
+///
+/// - cell (dictionary): The morphology to render.
+/// - projection (str, dictionary): Named or custom orthographic projection.
+/// - color-by (str, dictionary): Compartment coloring, a uniform color, or scalar node data.
+/// - colormap (str): Named scalar palette, either `"viridis"` or `"magma"`.
+/// - minimum (none, int, float): Optional lower bound for scalar coloring.
+/// - maximum (none, int, float): Optional upper bound for scalar coloring.
+/// - width (length): Positive Typst width of the render block.
+/// - height (length): Positive Typst height of the render block.
+/// - canvas-width (int): Positive SVG viewport width in unitless pixels.
+/// - canvas-height (int): Positive SVG viewport height in unitless pixels.
+/// - padding (int, float): Non-negative SVG viewport padding.
+/// - geometry (str): Segment geometry mode, such as `"tapered"` or `"skeleton"`.
+/// - radius-mode (str): Radius display policy applied to neurites.
+/// - soma-mode (str): Soma display policy.
+/// - stroke-width (int, float): Skeleton or centerline width in SVG pixels.
+/// - minimum-radius (int, float): Lower display-radius clamp in SVG pixels.
+/// - maximum-radius (int, float): Upper neurite display-radius clamp in SVG pixels.
+/// - maximum-soma-radius (int, float): Upper soma display-radius clamp in SVG pixels.
+/// - radius-scale (int, float): Positive multiplier applied to neurite radii.
+/// - radius-exponent (int, float): Positive exponent applied to neurite radii.
+/// - soma-scale (int, float): Positive multiplier applied to soma radii.
+/// - background (none, str): Optional SVG background color.
+/// - outline-color (none, str): Optional segment-outline color.
+/// - outline-width (int, float): Non-negative segment-outline width in SVG pixels.
+/// - display-tolerance (none, int, float): Optional display-only simplification tolerance in `cell.units`.
+/// - include-nodes (bool): Whether the generated SVG should include node elements.
+/// - anchor-nodes (array): Additional integer node IDs whose projected positions are returned.
+/// - labels (array): Typst-native annotations returned by `label`.
+/// - markers (array): Typst-native annotations returned by `marker`.
+/// - cetz (none, module): Imported CeTZ module required by `cetz-labels`.
+/// - cetz-labels (array): Leader annotations returned by `cetz-label`.
+/// - legend (none, dictionary): Optional categorical legend returned by `legend`.
+/// - color-bar (none, dictionary): Optional scalar color bar returned by `color-bar`.
+/// - scale-bar (none, dictionary): Optional physical scale bar returned by `scale-bar`.
+/// - strict-node-ids (bool): Whether missing annotation and anchor node IDs should stop evaluation.
+/// - return-report (bool): Whether to return geometry metadata with the rendered content.
+/// -> content, dictionary
 #let render(
   cell,
   projection: "xy",
@@ -953,6 +1136,8 @@
 /// Functional public API dictionary for selective imports. Prefer importing the
 /// package itself as a module (`#import "..." as swc`) so `swc.analyze(cell)` is
 /// directly callable. Dictionary-stored functions require `(swc.analyze)(cell)`.
+///
+/// -> dictionary
 #let swc = (
   load: load,
   from-text: from-text,
