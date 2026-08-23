@@ -7,11 +7,11 @@ manifest="$repository_dir/wasm-plugin/Cargo.toml"
 
 cd "$repository_dir"
 cargo run --manifest-path "$manifest" --quiet --locked --release \
-  -p axodendron-core --example benchmark -- 100000 2000
+  -p axodendron-core --example core-benchmark -- 100000 2000
 cargo run --manifest-path "$manifest" --quiet --locked --release \
-  -p axodendron-svg --example benchmark -- 100000 2000
+  -p axodendron-svg --example svg-benchmark -- 100000 2000
 
 if [ "${AXODENDRON_BENCH_FULL:-0}" = "1" ]; then
   cargo run --manifest-path "$manifest" --quiet --locked --release \
-    -p axodendron-core --example benchmark -- 250000 5000
+    -p axodendron-core --example core-benchmark -- 250000 5000
 fi

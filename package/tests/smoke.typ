@@ -5,6 +5,8 @@
 #let cell = swc.from-text(source, profile: "incf-strict")
 #let result = swc.analyze(cell)
 
+#assert.eq(swc.version, "0.1.1")
+
 #if sys.version >= version(0, 15, 0) {
   let path-cell = swc.load(
     path("../examples/data/AA0109.CNG.swc"),
@@ -31,6 +33,93 @@
 #assert(calc.abs(result.radial_distance.values.at(1) - calc.sqrt(41)) < 0.000001)
 #assert.eq(swc.analyze(cell, domain: "raw").summary.node_count, 4)
 #assert.eq(result.root_path_length.fingerprint, cell.fingerprint)
+
+#let registry = swc.available-metrics()
+#assert(registry.any(item => item.id == "local-bifurcation-angle"))
+#let taper-definition = registry.find(item => item.id == "taper-rate")
+#assert(taper-definition.parameters.any(parameter => parameter.name == "taper-quantity"))
+#assert(taper-definition.parameters.any(parameter => parameter.name == "taper-method"))
+#let measured = swc.measure(cell, metrics: (
+  "local-bifurcation-angle",
+  swc.metric("convex-hull-2d-area", plane: "xy"),
+  "segment-meander-angle",
+  "node-count",
+  "total-cable-length",
+  "maximum-root-path-length",
+  "section-length",
+))
+#assert.eq(measured.len(), 7)
+#assert.eq(measured.at(0).data.kind, "bifurcation-field")
+#assert.eq(measured.at(0).data.value.bifurcations.at(0).child_sections.len(), 2)
+#assert.eq(measured.at(1).data.kind, "morphology-metric")
+#assert.eq(measured.at(2).data.kind, "node-field")
+#assert.eq(measured.at(3).data.value.value.value, 3.0)
+#assert(calc.abs(measured.at(4).data.value.value.value - 2 * calc.sqrt(41)) < 0.000001)
+#assert(calc.abs(measured.at(5).data.value.value.value - calc.sqrt(41)) < 0.000001)
+#assert.eq(measured.at(6).data.kind, "section-field")
+#let angle-nodes = swc.field-to-nodes(
+  cell,
+  field: measured.at(0),
+  placement: "bifurcation-branch",
+)
+#assert.eq(angle-nodes.data.value.node_ids, (2,))
+#assert.eq(swc.branch-points(cell), (2,))
+#assert.eq(swc.terminals(cell), (3, 4))
+#assert.eq(swc.soma-nodes(cell, domain: "raw"), (1,))
+#assert.eq(swc.branch-order-nodes(cell, exact: 2), (3, 4))
+#assert.eq(swc.branch-order-nodes(cell, min: 1, max: 1), (2,))
+#assert.eq(swc.strahler-order-nodes(cell, exact: 1), (3, 4))
+#assert.eq(swc.strahler-order-nodes(cell, min: 2), (2,))
+
+#let frame = swc.principal-frame(cell, origin: "soma")
+#assert.eq(frame.axes.len(), 3)
+#assert.eq(frame.provenance.definition_version, 1)
+#let aligned = swc.pca-align(cell, frame: frame, allow-degenerate: true)
+#assert.eq(aligned.node-count, cell.node-count)
+#let translated = swc.translate(cell, offset: (1, 2, 3))
+#assert.eq(translated.at("transform-report").geometry.api_class, "swc-compatible")
+#let rotated = swc.rotate(cell, axis: (0, 0, 1), angle: 90deg)
+#assert.eq(rotated.node-count, cell.node-count)
+#let scaled = swc.uniform-scale(cell, factor: 2)
+#assert.eq(scaled.node-count, cell.node-count)
+#let reflected = swc.reflect(cell, normal: (1, 0, 0))
+#assert.eq(reflected.node-count, cell.node-count)
+#let centered = swc.center-morphology(cell)
+#assert.eq(centered.node-count, cell.node-count)
+#let affine = swc.affine-transform(
+  cell,
+  matrix: ((2, 0, 0), (0, 1, 0), (0, 0, 1)),
+  radius-policy: "volume-equivalent",
+)
+#assert(affine.at("transform-report").geometry.radius_representation_lossy)
+
+#let descriptor = swc.tmd(cell, filtration: "root-path-length")
+#let persistence-scale = swc.persistence-scale(descriptor)
+#assert.eq(descriptor.center, none)
+#assert.eq(descriptor.provenance.definition_version, 2)
+#assert.eq(persistence-scale.units, "um")
+#assert.eq(descriptor.pairs.len(), 2)
+
+#let cells = swc.population((
+  swc.population-entry("first", cell: cell),
+  swc.population-entry("second", cell: translated),
+))
+#let table = swc.feature-table(
+  cells,
+  columns: (
+    swc.feature-column(swc.metric("convex-hull-2d-area", plane: "xy")),
+    swc.feature-column("local-bifurcation-angle", aggregate: "mean"),
+    swc.feature-column("centroid", component: "x"),
+  ),
+  domain: "raw",
+)
+#assert.eq(table.rows.len(), 2)
+#assert.eq(table.summaries.at(0).valid_count, 2)
+#assert.eq(table.columns.at(2).component, "x")
+#assert(calc.abs(
+  table.rows.at(1).values.at(2).value - table.rows.at(0).values.at(2).value - 1,
+) < 0.000001)
+#assert(swc.feature-table-csv(table).starts-with("id,morphology-fingerprint"))
 
 #let selected-nodes = swc.select-nodes(cell, nodes: (2, 3))
 #assert.eq(selected-nodes.node-count, 2)
@@ -73,6 +162,20 @@
 #assert.eq(crossings.bins.len(), 3)
 #let crossings-2d = swc.sholl-2d(cell, radii: (2, 5), projection: "xy", center-node: 1)
 #assert.eq(crossings-2d.dimension, "two-dimensional")
+
+#let tree = swc.render-tree(
+  cell,
+  depth: "path-length",
+  color-by: angle-nodes,
+  width: 60mm,
+  height: 45mm,
+  canvas-width: 400,
+  canvas-height: 300,
+  anchor-nodes: (2,),
+  return-report: true,
+)
+#assert.eq(tree.report.depth, "path-length")
+#assert.eq(tree.node-anchors.at(0).node, 2)
 
 #let offset-label = swc.label(node: 3, offset: (x: -40pt, y: -14pt), [terminal])
 #assert.eq(offset-label.offset, (x: -40pt, y: -14pt))
@@ -174,3 +277,7 @@
 #assert.eq(figure.report.overlay_node_count, 2)
 #figure.body
 #cetz-figure.body
+#tree.body
+#swc.persistence-barcode(descriptor, width: 60mm, scale: persistence-scale)
+#swc.persistence-diagram(descriptor, size: 40mm, scale: persistence-scale)
+#swc.persistence-legend()

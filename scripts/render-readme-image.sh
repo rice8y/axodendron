@@ -6,7 +6,8 @@ repository_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 typst_bin=${TYPST_BIN:-typst}
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/axodendron-readme.XXXXXX")
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
-package_root="$temporary_dir/typst/packages/preview/axodendron/0.1.0"
+package_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$repository_dir/package/typst.toml")
+package_root="$temporary_dir/typst/packages/preview/axodendron/$package_version"
 
 for command_name in "$typst_bin" qpdf pdftoppm; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -15,9 +16,10 @@ for command_name in "$typst_bin" qpdf pdftoppm; do
   fi
 done
 
-mkdir -p "$package_root"
+mkdir -p "$package_root/src"
 cp "$repository_dir/package/typst.toml" "$package_root/typst.toml"
 cp "$repository_dir/package/lib.typ" "$package_root/lib.typ"
+cp "$repository_dir"/package/src/*.typ "$package_root/src/"
 cp "$repository_dir/package/plugin.wasm" "$package_root/plugin.wasm"
 
 render_image() {

@@ -118,6 +118,7 @@ pub struct Morphology {
     source_lines: Vec<u32>,
     units: String,
     fingerprint: String,
+    topology_fingerprint: String,
     source_fingerprint: Option<String>,
     soma_class: SomaClass,
     metadata: SwcMetadata,
@@ -286,6 +287,7 @@ impl Morphology {
         }
 
         let fingerprint = semantic_fingerprint(&ids, &kinds, &positions, &radii, &parents, &units);
+        let topology_fingerprint = topology_fingerprint(&ids, &kinds, &parents);
         if expected_fingerprint.is_some_and(|expected| expected != fingerprint) {
             return Err(ModelError::FingerprintMismatch);
         }
@@ -312,6 +314,7 @@ impl Morphology {
             source_lines,
             units,
             fingerprint,
+            topology_fingerprint,
             source_fingerprint,
             soma_class,
             metadata,
@@ -361,6 +364,15 @@ impl Morphology {
     /// A deterministic hash of semantic morphology content, independent of SWC formatting.
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// A deterministic hash of node identity, SWC kinds, and parent topology.
+    ///
+    /// Unlike [`Self::fingerprint`], this value is unchanged by coordinate-only
+    /// transforms. It is suitable for transient section and bifurcation keys,
+    /// but never proves that a geometry-dependent measurement is still valid.
+    pub fn topology_fingerprint(&self) -> &str {
+        &self.topology_fingerprint
     }
 
     /// Hash of the original SWC bytes, retained through pure transforms.
@@ -520,6 +532,18 @@ fn semantic_fingerprint(
     }
     hash.update(&(units.len() as u64).to_le_bytes());
     hash.update(units.as_bytes());
+    hash.finish()
+}
+
+fn topology_fingerprint(ids: &[i64], kinds: &[i32], parents: &[u32]) -> String {
+    let mut hash = Fnv1a64::new();
+    hash.update(b"axodendron-topology-v1\0");
+    hash.update(&(ids.len() as u64).to_le_bytes());
+    for ix in 0..ids.len() {
+        hash.update(&ids[ix].to_le_bytes());
+        hash.update(&kinds[ix].to_le_bytes());
+        hash.update(&parents[ix].to_le_bytes());
+    }
     hash.finish()
 }
 

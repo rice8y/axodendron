@@ -8,6 +8,15 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+autoexamples = false
+
+[[example]]
+name = "render"
+path = "examples/render.rs"
+
+[[example]]
+name = "svg-benchmark"
+path = "examples/benchmark.rs"
 
 [dependencies]
 axodendron-core.workspace = true

@@ -8,6 +8,15 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+autoexamples = false
+
+[[example]]
+name = "inspect"
+path = "examples/inspect.rs"
+
+[[example]]
+name = "core-benchmark"
+path = "examples/benchmark.rs"
 
 [dependencies]
 serde.workspace = true

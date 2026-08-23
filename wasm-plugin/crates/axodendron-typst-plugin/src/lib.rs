@@ -3,11 +3,18 @@
 use std::io::Cursor;
 
 use axodendron_core::{
-    AnalysisDomain, AnalysisOptions, Diagnostic, MAX_NODE_COUNT, Morphology, NodeId, ParseResult,
-    Projection, ResampleOptions, Severity, SimplifyOptions, SomaClass, SwcMetadata, TransformError,
-    TransformResult, ValidationProfile, Vec3, parse_swc,
+    Affine3, AffineRadiusPolicy, AnalysisDomain, AnalysisOptions, Diagnostic, FeatureTable,
+    FeatureTableOptions, FieldToNodesOptions, MAX_NODE_COUNT, MeasureOptions, MetricResult,
+    Morphology, NodeId, NodeSelection, ParseResult, PopulationMorphology, PrincipalFrame,
+    PrincipalFrameOptions, PrincipalWeighting, Projection, ResampleOptions, SelectionQuery,
+    Selector, Severity, SimplifyOptions, SomaClass, SwcMetadata, TmdError, TmdOptions,
+    TransformError, TransformResult, ValidationProfile, Vec3, feature_table as build_feature_table,
+    feature_table_csv as table_csv, metric_registry, parse_swc,
 };
-use axodendron_svg::{MAX_SVG_BYTES, RenderError, RenderOptions, SvgDocument, render_svg};
+use axodendron_svg::{
+    MAX_SVG_BYTES, RenderError, RenderOptions, SvgDocument, TreeRenderOptions, TreeSvgDocument,
+    render_svg, render_tree_svg,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +24,7 @@ use wasm_minimal_protocol::wasm_func;
 #[cfg(target_arch = "wasm32")]
 wasm_minimal_protocol::initiate_protocol!();
 
-pub const API_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PAYLOAD_SCHEMA_VERSION: u16 = 2;
 const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
@@ -26,11 +33,13 @@ const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_SHOLL_RADII: usize = 10_000;
 const MAX_KIND_SELECTIONS: usize = 4096;
+const MAX_METRICS: usize = 256;
+const MAX_POPULATION: usize = 4096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VersionedRequest<T> {
-    pub api_version: u16,
+    pub protocol_version: u16,
     pub value: T,
 }
 
@@ -42,7 +51,7 @@ pub struct ApiError {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WireResponse<T> {
-    pub api_version: u16,
+    pub protocol_version: u16,
     pub package_version: String,
     pub ok: bool,
     pub value: Option<T>,
@@ -52,7 +61,7 @@ pub struct WireResponse<T> {
 impl<T> WireResponse<T> {
     fn success(value: T) -> Self {
         Self {
-            api_version: API_VERSION,
+            protocol_version: PROTOCOL_VERSION,
             package_version: PACKAGE_VERSION.to_owned(),
             ok: true,
             value: Some(value),
@@ -62,7 +71,7 @@ impl<T> WireResponse<T> {
 
     fn failure(code: &str, message: impl Into<String>) -> Self {
         Self {
-            api_version: API_VERSION,
+            protocol_version: PROTOCOL_VERSION,
             package_version: PACKAGE_VERSION.to_owned(),
             ok: false,
             value: None,
@@ -148,14 +157,104 @@ impl ShollProjection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum TransformRequest {
-    SelectNodes { node_ids: Vec<i64> },
-    SelectKinds { kinds: Vec<i32> },
-    Subtree { node_id: i64 },
-    Path { from_id: i64, to_id: i64 },
-    Reroot { node_id: i64 },
-    DropKinds { kinds: Vec<i32> },
-    Simplify { options: SimplifyOptions },
-    Resample { options: ResampleOptions },
+    SelectNodes {
+        node_ids: Vec<i64>,
+    },
+    SelectKinds {
+        kinds: Vec<i32>,
+    },
+    Subtree {
+        node_id: i64,
+    },
+    Path {
+        from_id: i64,
+        to_id: i64,
+    },
+    Reroot {
+        node_id: i64,
+    },
+    DropKinds {
+        kinds: Vec<i32>,
+    },
+    Simplify {
+        options: SimplifyOptions,
+    },
+    Resample {
+        options: ResampleOptions,
+    },
+    Translate {
+        offset: Vec3,
+    },
+    Rotate {
+        axis: Vec3,
+        #[serde(deserialize_with = "axodendron_core::serde_number::f64")]
+        angle_radians: f64,
+        center: Vec3,
+    },
+    UniformScale {
+        #[serde(deserialize_with = "axodendron_core::serde_number::f64")]
+        factor: f64,
+        center: Vec3,
+    },
+    Reflect {
+        normal: Vec3,
+        point: Vec3,
+    },
+    PrincipalAlign {
+        frame: Box<PrincipalFrame>,
+        #[serde(default)]
+        allow_degenerate: bool,
+    },
+    GeneralAffine {
+        affine: Affine3,
+        radius_policy: AffineRadiusPolicy,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryNodesRequest {
+    #[serde(default)]
+    pub query: SelectionQuery,
+    pub selector: Selector,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldToNodesRequest {
+    pub field: MetricResult,
+    pub options: FieldToNodesOptions,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PopulationWireEntry {
+    pub id: String,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureTableRequest {
+    pub population: Vec<PopulationWireEntry>,
+    pub options: FeatureTableOptions,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CenterKind {
+    Soma,
+    Centroid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CenterPointRequest {
+    pub center: CenterKind,
+    #[serde(default)]
+    pub selection: SelectionQuery,
+    #[serde(default)]
+    pub weighting: PrincipalWeighting,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -243,6 +342,221 @@ pub fn analyze_with(payload: &[u8], request: &[u8]) -> Vec<u8> {
     with_payload(payload, |morphology| {
         morphology.analyze_with_options(options)
     })
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn available_metrics() -> Vec<u8> {
+    encode_response(WireResponse::success(metric_registry()))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn measure(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let options = match decode_request::<MeasureOptions>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if options.metrics.is_empty() || options.metrics.len() > MAX_METRICS {
+        return encode_response(WireResponse::<Vec<MetricResult>>::failure(
+            "MEASURE_INVALID_METRIC_COUNT",
+            format!("measure requires between 1 and {MAX_METRICS} metrics"),
+        ));
+    }
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match payload.morphology.measure(&options) {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<Vec<MetricResult>>::failure(
+            metric_error_code(&error),
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn principal_frame(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let options = match decode_request::<PrincipalFrameOptions>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match payload.morphology.principal_frame(&options) {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<PrincipalFrame>::failure(
+            "PRINCIPAL_FRAME_INVALID",
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn center_point(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let request = match decode_request::<CenterPointRequest>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let morphology = &payload.morphology;
+    let value = match request.center {
+        CenterKind::Soma => {
+            if matches!(
+                morphology.soma_class(),
+                SomaClass::Absent | SomaClass::Disconnected | SomaClass::Ambiguous
+            ) {
+                return encode_response(WireResponse::<Vec3>::failure(
+                    "CENTER_AMBIGUOUS_SOMA",
+                    "soma centering requires unambiguous soma geometry",
+                ));
+            }
+            morphology.soma_center()
+        }
+        CenterKind::Centroid if request.weighting == PrincipalWeighting::Nodes => {
+            let selection = match morphology.query_nodes(&request.selection, Selector::All) {
+                Ok(value) => value,
+                Err(error) => {
+                    return encode_response(WireResponse::<Vec3>::failure(
+                        "CENTER_INVALID_SELECTION",
+                        error.to_string(),
+                    ));
+                }
+            };
+            let sum = selection.node_ids.iter().fold(Vec3::default(), |sum, id| {
+                sum + morphology.position(morphology.index_of(NodeId(*id)).unwrap())
+            });
+            sum * (1.0 / selection.node_ids.len() as f64)
+        }
+        CenterKind::Centroid => match morphology.principal_frame(&PrincipalFrameOptions {
+            selection: request.selection,
+            weighting: request.weighting,
+            ..Default::default()
+        }) {
+            Ok(frame) => frame.centroid,
+            Err(error) => {
+                return encode_response(WireResponse::<Vec3>::failure(
+                    "CENTER_INVALID_GEOMETRY",
+                    error.to_string(),
+                ));
+            }
+        },
+    };
+    encode_response(WireResponse::success(value))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn query_nodes(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let request = match decode_request::<QueryNodesRequest>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match payload
+        .morphology
+        .query_nodes(&request.query, request.selector)
+    {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<NodeSelection>::failure(
+            "QUERY_INVALID",
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn field_to_nodes(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let request = match decode_request::<FieldToNodesRequest>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match payload
+        .morphology
+        .field_to_nodes(&request.field, request.options)
+    {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<MetricResult>::failure(
+            "FIELD_TO_NODES_INVALID",
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn tmd(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let options = match decode_request::<TmdOptions>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match payload.morphology.tmd(&options) {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<axodendron_core::TmdResult>::failure(
+            tmd_error_code(&error),
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn feature_table(request: &[u8]) -> Vec<u8> {
+    let request = match decode_request::<FeatureTableRequest>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if request.population.is_empty() || request.population.len() > MAX_POPULATION {
+        return encode_response(WireResponse::<FeatureTable>::failure(
+            "POPULATION_INVALID_SIZE",
+            format!("population requires between 1 and {MAX_POPULATION} morphologies"),
+        ));
+    }
+    if request.options.columns.is_empty() || request.options.columns.len() > MAX_METRICS {
+        return encode_response(WireResponse::<FeatureTable>::failure(
+            "POPULATION_INVALID_COLUMN_COUNT",
+            format!("feature table requires between 1 and {MAX_METRICS} columns"),
+        ));
+    }
+    let mut population = Vec::with_capacity(request.population.len());
+    for item in request.population {
+        let payload = match decode_payload(&item.payload) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+        population.push(PopulationMorphology {
+            id: item.id,
+            morphology: payload.morphology,
+        });
+    }
+    match build_feature_table(&population, &request.options) {
+        Ok(value) => encode_response(WireResponse::success(value)),
+        Err(error) => encode_response(WireResponse::<FeatureTable>::failure(
+            "POPULATION_INVALID",
+            error.to_string(),
+        )),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn feature_table_csv(request: &[u8]) -> Vec<u8> {
+    let table = match decode_request::<FeatureTable>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    encode_response(WireResponse::success(table_csv(&table)))
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_func)]
@@ -389,6 +703,30 @@ pub fn transform(payload: &[u8], request: &[u8]) -> Vec<u8> {
         TransformRequest::DropKinds { kinds } => payload.morphology.drop_kinds_with_report(&kinds),
         TransformRequest::Simplify { options } => payload.morphology.simplify_with_report(&options),
         TransformRequest::Resample { options } => payload.morphology.resample_with_report(&options),
+        TransformRequest::Translate { offset } => payload.morphology.translate_with_report(offset),
+        TransformRequest::Rotate {
+            axis,
+            angle_radians,
+            center,
+        } => payload
+            .morphology
+            .rotate_with_report(axis, angle_radians, center),
+        TransformRequest::UniformScale { factor, center } => {
+            payload.morphology.uniform_scale_with_report(factor, center)
+        }
+        TransformRequest::Reflect { normal, point } => {
+            payload.morphology.reflect_with_report(normal, point)
+        }
+        TransformRequest::PrincipalAlign {
+            frame,
+            allow_degenerate,
+        } => payload
+            .morphology
+            .align_to_principal_frame_with_report(&frame, allow_degenerate),
+        TransformRequest::GeneralAffine {
+            affine,
+            radius_policy,
+        } => payload.morphology.affine_with_report(affine, radius_policy),
     };
     match transformed {
         Ok(result) => encode_response(WireResponse::success(TransformOutput {
@@ -409,6 +747,11 @@ pub fn transform(payload: &[u8], request: &[u8]) -> Vec<u8> {
                 TransformError::InvalidStep => "TRANSFORM_INVALID_STEP",
                 TransformError::IdSpaceExhausted => "TRANSFORM_ID_SPACE_EXHAUSTED",
                 TransformError::NodeLimitExceeded => "LIMIT_NODE_COUNT",
+                TransformError::InvalidGeometryTransform => "TRANSFORM_INVALID_GEOMETRY",
+                TransformError::InvalidRotationAxis => "TRANSFORM_INVALID_AXIS",
+                TransformError::InvalidScale => "TRANSFORM_INVALID_SCALE",
+                TransformError::NonFiniteResult => "TRANSFORM_NONFINITE_RESULT",
+                TransformError::DegeneratePrincipalFrame => "TRANSFORM_DEGENERATE_FRAME",
             };
             encode_response(WireResponse::<TransformOutput>::failure(
                 code,
@@ -448,6 +791,31 @@ pub fn render(payload: &[u8], request: &[u8]) -> Vec<u8> {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_func)]
+pub fn render_tree(payload: &[u8], request: &[u8]) -> Vec<u8> {
+    let options = match decode_request::<TreeRenderOptions>(request) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let payload = match decode_payload(payload) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    match render_tree_svg(&payload.morphology, &options) {
+        Ok(document) if document.svg.len() <= MAX_SVG_BYTES => {
+            encode_response(WireResponse::success(document))
+        }
+        Ok(_) => encode_response(WireResponse::<TreeSvgDocument>::failure(
+            "LIMIT_SVG_BYTES",
+            format!("SVG output exceeds the {MAX_SVG_BYTES}-byte limit"),
+        )),
+        Err(error) => encode_response(WireResponse::<TreeSvgDocument>::failure(
+            render_error_code(&error),
+            error.to_string(),
+        )),
+    }
+}
+
 fn with_payload<T: Serialize>(payload: &[u8], operation: impl FnOnce(&Morphology) -> T) -> Vec<u8> {
     let payload = match decode_payload(payload) {
         Ok(payload) => payload,
@@ -465,16 +833,16 @@ fn decode_request<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Vec<u8>> {
     }
     let request: VersionedRequest<T> = decode(bytes).map_err(|error| {
         encode_response(WireResponse::<()>::failure(
-            "API_DECODE_REQUEST",
+            "PROTOCOL_DECODE_REQUEST",
             error.to_string(),
         ))
     })?;
-    if request.api_version != API_VERSION {
+    if request.protocol_version != PROTOCOL_VERSION {
         return Err(encode_response(WireResponse::<()>::failure(
-            "API_VERSION_MISMATCH",
+            "PROTOCOL_VERSION_MISMATCH",
             format!(
-                "expected API version {API_VERSION}, found {}",
-                request.api_version
+                "expected protocol version {PROTOCOL_VERSION}, found {}",
+                request.protocol_version
             ),
         )));
     }
@@ -490,7 +858,7 @@ fn decode_payload(bytes: &[u8]) -> Result<MorphologyPayload, Vec<u8>> {
     }
     let payload: MorphologyPayload = decode(bytes).map_err(|error| {
         encode_response(WireResponse::<MorphologyPayload>::failure(
-            "API_DECODE_PAYLOAD",
+            "PROTOCOL_DECODE_PAYLOAD",
             error.to_string(),
         ))
     })?;
@@ -529,6 +897,25 @@ fn render_error_code(error: &RenderError) -> &'static str {
         RenderError::InvalidStyle => "RENDER_INVALID_STYLE",
         RenderError::OutputTooLarge => "LIMIT_SVG_BYTES",
         RenderError::EmptyMorphology => "RENDER_EMPTY_MORPHOLOGY",
+        RenderError::InvalidSelection(_) => "RENDER_INVALID_SELECTION",
+    }
+}
+
+fn metric_error_code(error: &axodendron_core::MetricError) -> &'static str {
+    match error {
+        axodendron_core::MetricError::Query(_) => "MEASURE_INVALID_SELECTION",
+        axodendron_core::MetricError::UnknownMetric(_) => "MEASURE_UNKNOWN_METRIC",
+        axodendron_core::MetricError::InvalidParameter { .. } => "MEASURE_INVALID_PARAMETER",
+        axodendron_core::MetricError::PrincipalFrame(_) => "MEASURE_PRINCIPAL_FRAME",
+    }
+}
+
+fn tmd_error_code(error: &TmdError) -> &'static str {
+    match error {
+        TmdError::Query(_) => "TMD_INVALID_SELECTION",
+        TmdError::NoSoma => "TMD_SOMA_MISSING",
+        TmdError::AmbiguousSoma => "TMD_SOMA_AMBIGUOUS",
+        TmdError::CenterNotApplicable => "TMD_CENTER_NOT_APPLICABLE",
     }
 }
 
@@ -570,6 +957,16 @@ mod tests {
         morphology: ForgedMorphology,
     }
 
+    #[derive(Serialize)]
+    struct LegacyVersionedRequest<T> {
+        api_version: u16,
+        value: T,
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
     #[derive(Clone, Serialize)]
     struct ForgedMorphology {
         ids: Vec<i64>,
@@ -587,7 +984,7 @@ mod tests {
         let mut bytes = Vec::new();
         ciborium::into_writer(
             &VersionedRequest {
-                api_version: API_VERSION,
+                protocol_version: PROTOCOL_VERSION,
                 value,
             },
             &mut bytes,
@@ -662,6 +1059,48 @@ mod tests {
         let document: WireResponse<SvgDocument> =
             ciborium::from_reader(render(&payload, &request(render_options)).as_slice()).unwrap();
         assert!(document.value.unwrap().svg.contains("<svg"));
+
+        let metrics: WireResponse<Vec<MetricResult>> = ciborium::from_reader(
+            measure(
+                &payload,
+                &request(MeasureOptions {
+                    metrics: vec![axodendron_core::MetricSpec {
+                        id: "centroid".to_owned(),
+                        parameters: axodendron_core::MetricParameters::default(),
+                    }],
+                    selection: SelectionQuery {
+                        domain: AnalysisDomain::Raw,
+                        ..Default::default()
+                    },
+                    section_boundaries: axodendron_core::SectionBoundaryPolicy::TopologyOnly,
+                }),
+            )
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(metrics.value.unwrap()[0].metric.id, "centroid");
+
+        let selection: WireResponse<NodeSelection> = ciborium::from_reader(
+            query_nodes(
+                &payload,
+                &request(QueryNodesRequest {
+                    query: SelectionQuery {
+                        domain: AnalysisDomain::Raw,
+                        ..Default::default()
+                    },
+                    selector: Selector::Terminals,
+                }),
+            )
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(selection.value.unwrap().node_ids, vec![3]);
+
+        let tree: WireResponse<TreeSvgDocument> = ciborium::from_reader(
+            render_tree(&payload, &request(TreeRenderOptions::default())).as_slice(),
+        )
+        .unwrap();
+        assert!(tree.value.unwrap().svg.contains("abstract topology layout"));
     }
 
     #[test]
@@ -669,7 +1108,7 @@ mod tests {
         let mut bytes = Vec::new();
         ciborium::into_writer(
             &VersionedRequest {
-                api_version: 99,
+                protocol_version: 1,
                 value: ParseOptions::default(),
             },
             &mut bytes,
@@ -678,7 +1117,37 @@ mod tests {
         let response: WireResponse<ParseOutput> =
             ciborium::from_reader(parse(b"", &bytes).as_slice()).unwrap();
         assert!(!response.ok);
-        assert_eq!(response.error.unwrap().code, "API_VERSION_MISMATCH");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_VERSION_MISMATCH");
+    }
+
+    #[test]
+    fn protocol_v2_request_and_response_have_golden_cbor_shapes() {
+        let request = request(ParseOptions::default());
+        let response = encode_response(WireResponse::<()>::failure("GOLDEN", "fixed"));
+        assert_eq!(
+            hex(&request),
+            "a27070726f746f636f6c5f76657273696f6e026576616c7565a16770726f66696c656a7065726d697373697665"
+        );
+        assert_eq!(
+            hex(&response),
+            "a57070726f746f636f6c5f76657273696f6e026f7061636b6167655f76657273696f6e65302e312e31626f6bf46576616c7565f6656572726f72a264636f646566474f4c44454e676d657373616765656669786564"
+        );
+    }
+
+    #[test]
+    fn protocol_rejects_the_legacy_api_version_field() {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(
+            &LegacyVersionedRequest {
+                api_version: 1,
+                value: ParseOptions::default(),
+            },
+            &mut bytes,
+        )
+        .unwrap();
+        let response: WireResponse<ParseOutput> =
+            ciborium::from_reader(parse(b"", &bytes).as_slice()).unwrap();
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
     }
 
     #[test]
@@ -700,6 +1169,25 @@ mod tests {
         .unwrap();
         assert!(!response.ok);
         assert_eq!(response.error.unwrap().code, "SHOLL_INVALID_RADIUS");
+    }
+
+    #[test]
+    fn protocol_rejects_a_center_for_root_path_tmd_with_a_stable_code() {
+        let payload = parsed_payload();
+        let response: WireResponse<axodendron_core::TmdResult> = ciborium::from_reader(
+            tmd(
+                &payload,
+                &request(TmdOptions {
+                    selection: SelectionQuery::default(),
+                    filtration: axodendron_core::TmdFiltration::RootPathLength,
+                    center: Some(axodendron_core::TmdCenter::Soma),
+                }),
+            )
+            .as_slice(),
+        )
+        .unwrap();
+        assert!(!response.ok);
+        assert_eq!(response.error.unwrap().code, "TMD_CENTER_NOT_APPLICABLE");
     }
 
     #[test]
@@ -735,7 +1223,7 @@ mod tests {
             .as_slice(),
         )
         .unwrap();
-        assert_eq!(response.error.unwrap().code, "API_DECODE_REQUEST");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
 
         let response: WireResponse<axodendron_core::ShollResult> = ciborium::from_reader(
             sholl(
@@ -751,7 +1239,7 @@ mod tests {
             .as_slice(),
         )
         .unwrap();
-        assert_eq!(response.error.unwrap().code, "API_DECODE_REQUEST");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
 
         let forest = parse(
             b"10 3 0 0 0 1 -1\n20 3 5 0 0 1 -1\n",
@@ -786,7 +1274,7 @@ mod tests {
         let response: WireResponse<ParseOutput> =
             ciborium::from_reader(parse(b"", b"not cbor").as_slice()).unwrap();
         assert!(!response.ok);
-        assert_eq!(response.error.unwrap().code, "API_DECODE_REQUEST");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
 
         let response: WireResponse<ParseOutput> =
             ciborium::from_reader(parse(&[0xff], &request(ParseOptions::default())).as_slice())
@@ -797,13 +1285,13 @@ mod tests {
         trailing_request.push(0);
         let response: WireResponse<ParseOutput> =
             ciborium::from_reader(parse(b"", &trailing_request).as_slice()).unwrap();
-        assert_eq!(response.error.unwrap().code, "API_DECODE_REQUEST");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
 
         let mut trailing_payload = parsed_payload();
         trailing_payload.push(0);
         let response: WireResponse<axodendron_core::AnalysisBundle> =
             ciborium::from_reader(analyze(&trailing_payload).as_slice()).unwrap();
-        assert_eq!(response.error.unwrap().code, "API_DECODE_PAYLOAD");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_PAYLOAD");
     }
 
     #[test]
@@ -832,8 +1320,17 @@ mod tests {
             assert_cbor_response(analyze(&bytes));
             assert_cbor_response(analyze_with(&bytes, &bytes));
             assert_cbor_response(sholl(&bytes, &bytes));
+            assert_cbor_response(measure(&bytes, &bytes));
+            assert_cbor_response(principal_frame(&bytes, &bytes));
+            assert_cbor_response(center_point(&bytes, &bytes));
+            assert_cbor_response(query_nodes(&bytes, &bytes));
+            assert_cbor_response(field_to_nodes(&bytes, &bytes));
+            assert_cbor_response(tmd(&bytes, &bytes));
+            assert_cbor_response(feature_table(&bytes));
+            assert_cbor_response(feature_table_csv(&bytes));
             assert_cbor_response(transform(&bytes, &bytes));
             assert_cbor_response(render(&bytes, &bytes));
+            assert_cbor_response(render_tree(&bytes, &bytes));
             assert_cbor_response(export_swc(&bytes));
 
             let ascii: Vec<u8> = bytes.iter().map(|byte| 32 + byte % 95).collect();
@@ -864,7 +1361,7 @@ mod tests {
         let mut out_of_range = valid_shape_with_wrong_fingerprint();
         out_of_range.parents[1] = 99;
         let error = forged_error(out_of_range);
-        assert_eq!(error.code, "API_DECODE_PAYLOAD");
+        assert_eq!(error.code, "PROTOCOL_DECODE_PAYLOAD");
         assert!(error.message.contains("out-of-range parent"));
 
         let mut wrong_length = valid_shape_with_wrong_fingerprint();
@@ -969,7 +1466,7 @@ mod tests {
             .as_slice(),
         )
         .unwrap();
-        assert_eq!(response.error.unwrap().code, "API_DECODE_REQUEST");
+        assert_eq!(response.error.unwrap().code, "PROTOCOL_DECODE_REQUEST");
 
         let response: WireResponse<TransformOutput> = ciborium::from_reader(
             transform(

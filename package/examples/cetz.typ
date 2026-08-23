@@ -1,4 +1,4 @@
-#import "@preview/axodendron:0.1.0" as swc
+#import "@preview/axodendron:0.1.1" as swc
 #import "@preview/cetz:0.5.2"
 
 #set page(width: auto, height: auto, margin: 3mm)

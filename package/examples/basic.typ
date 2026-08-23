@@ -1,4 +1,4 @@
-#import "@preview/axodendron:0.1.0" as swc
+#import "@preview/axodendron:0.1.1" as swc
 
 #set page(margin: 16mm)
 #set text(font: "New Computer Modern", size: 9pt)
