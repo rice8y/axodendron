@@ -55,6 +55,8 @@ jobs:
           typst-versions-yaml: |
             typst-min:
               version: 0.14.0
+            typst-visual:
+              version: 0.14.2
             typst-latest:
               version: latest
       - run: cargo install wasm-tools --locked --version 1.245.1
@@ -62,6 +64,32 @@ jobs:
       - run: git diff --exit-code -- package/plugin.wasm
       - run: TYPST_BIN=typst-latest ./scripts/check-package.sh
       - run: typst-latest compile --root . package/tests/smoke.typ /tmp/axodendron-smoke-latest.pdf
+      - name: Verify fixed-version pixel baseline
+        run: TYPST_BIN=typst-visual ./scripts/check-visual-regression.sh
+      - name: Upload visual regression failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-regression-${{ github.run_id }}
+          path: /tmp/axodendron-visual-regression.png
+          if-no-files-found: ignore
+
+  scientific-validation:
+    name: NeuroM and L-Measure cross-validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned validation tools
+        run: |
+          python3 -m venv /tmp/axodendron-scientific-validation
+          /tmp/axodendron-scientific-validation/bin/python -m pip install \
+            --disable-pip-version-check \
+            neurom==4.0.5 \
+            pylmeasure==0.2.0
+      - name: Recompute upstream fixtures
+        run: /tmp/axodendron-scientific-validation/bin/python scripts/check-upstream-cross-validation.py
 
   neuromorpho:
     name: Private NeuroMorpho regression
