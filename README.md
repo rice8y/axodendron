@@ -230,7 +230,7 @@ Install Rust with the `wasm32-unknown-unknown` target, Typst 0.14.0 or newer, an
 ./scripts/check.sh
 ```
 
-The check performs formatting, warnings-as-errors linting and documentation, normal and adversarial tests, the 250,000-node limit suite, performance budgets, two byte-identical clean WASM builds, package-boundary verification, README synchronization, and Typst smoke compilation. CI additionally recomputes pinned NeuroM 4.0.5 and L-Measure 5.2 cross-validation values and verifies the exact decoded RGBA pixels of a Typst 0.14.2 PNG baseline.
+The check performs formatting, warnings-as-errors linting and documentation, normal and adversarial tests, the 250,000-node limit suite, performance budgets, two byte-identical clean WASM builds, package-boundary verification, and README synchronization. CI additionally recomputes pinned NeuroM 4.0.5 and L-Measure 5.2 cross-validation values.
 
 For the checksum-pinned private NeuroMorpho regression and 1,000 render cases, run:
 

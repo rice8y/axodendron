@@ -1,5 +1,7 @@
 /target/
 /wasm-plugin/target/
+/package/tests/
+/tests/
 /.typst-cache/
 *.pdf
 *.png

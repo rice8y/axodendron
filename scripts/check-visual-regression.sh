@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 typst_bin=${TYPST_BIN:-typst}
 python_bin=${PYTHON_BIN:-python3}
-baseline="$repository_dir/package/tests/visual-regression.sha256"
+baseline="$repository_dir/tests/typst/visual-regression.sha256"
 actual=${AXODENDRON_VISUAL_OUTPUT:-"${TMPDIR:-/tmp}/axodendron-visual-regression.png"}
 
 "$python_bin" "$script_dir/test_png_pixel_sha256.py"
@@ -14,7 +14,7 @@ actual=${AXODENDRON_VISUAL_OUTPUT:-"${TMPDIR:-/tmp}/axodendron-visual-regression
   --root "$repository_dir" \
   --format png \
   --ppi 144 \
-  "$repository_dir/package/tests/visual-regression.typ" \
+  "$repository_dir/tests/typst/visual-regression.typ" \
   "$actual"
 
 observed=$("$python_bin" "$script_dir/png-pixel-sha256.py" "$actual")

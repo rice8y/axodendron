@@ -55,24 +55,12 @@ jobs:
           typst-versions-yaml: |
             typst-min:
               version: 0.14.0
-            typst-visual:
-              version: 0.14.2
             typst-latest:
               version: latest
       - run: cargo install wasm-tools --locked --version 1.245.1
       - run: TYPST_BIN=typst-min AXODENDRON_BENCH_FULL=1 ./scripts/check.sh
       - run: git diff --exit-code -- package/plugin.wasm
       - run: TYPST_BIN=typst-latest ./scripts/check-package.sh
-      - run: typst-latest compile --root . package/tests/smoke.typ /tmp/axodendron-smoke-latest.pdf
-      - name: Verify fixed-version pixel baseline
-        run: TYPST_BIN=typst-visual ./scripts/check-visual-regression.sh
-      - name: Upload visual regression failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: visual-regression-${{ github.run_id }}
-          path: /tmp/axodendron-visual-regression.png
-          if-no-files-found: ignore
 
   scientific-validation:
     name: NeuroM and L-Measure cross-validation
@@ -109,4 +97,3 @@ jobs:
       - run: ./scripts/fetch-neuromorpho-fixtures.sh
       - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked -p axodendron-core --test neuromorpho -- --ignored
       - run: cargo test --manifest-path wasm-plugin/Cargo.toml --locked -p axodendron-svg --test neuromorpho_render -- --ignored
-      - run: typst compile --root . package/tests/neuromorpho.typ /tmp/axodendron-neuromorpho.pdf

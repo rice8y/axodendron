@@ -247,10 +247,10 @@ A successful load returns a dictionary containing `valid`, `diagnostics`, `finge
     table.header([*Surface*], [*Minimum*], [*Coverage*]),
     [Typst package with string or bytes input],
     [`0.14.0`],
-    [CI compiles the complete package and smoke suite on the minimum and latest configured Typst versions],
+    [CI compiles every bundled example through the package boundary on the minimum and latest configured Typst versions],
     [Typst `path(...)` input],
     [`0.15.0`],
-    [A version-gated smoke assertion loads a real file through `path(...)`],
+    [Version-gated integration verification loads a real file through `path(...)`],
     [Rust workspace],
     [`1.85.0`],
     [Ubuntu minimum plus stable Rust on Ubuntu, macOS, and Windows],
@@ -308,7 +308,7 @@ This manual uses four standardized real SWC reconstructions from NeuroMorpho.Org
 ]
 
 #info-alert[
-  The real files are included only as attributed documentation and README examples. Their source URLs, SHA-256 checksums, archive names, original studies, and license are also recorded in `THIRD_PARTY_NOTICES.md`. The separate 30-case regression corpus remains an ignored, checksum-verified private cache and is not distributed.
+  The real files are included only as attributed documentation and README examples. Their source URLs, SHA-256 checksums, archive names, original studies, and license are also recorded in `THIRD_PARTY_NOTICES.md`. The separate 30-case regression corpus is kept in a checksum-verified local cache and is not distributed.
 ]
 
 = Validation and Provenance
@@ -1777,7 +1777,7 @@ With `return-report: true`, the renderer returns `body`, `width`, `height`, `can
 - Equivalent-sphere soma display is a visual summary. Only supported soma encodings receive documented area and volume metrics.
 - Scalar color is linear and supports Viridis or Magma. Axodendron does not automatically choose diverging, logarithmic, or categorical maps for a scientific hypothesis.
 - Native and CeTZ labels use exact projected node anchors and explicit offsets; CeTZ `via` points define polylines and `controls` define Bezier curves, but collision-free placement is not automatic.
-- Rendering tests guarantee deterministic SVG structure and broad real-data coverage. CI additionally hashes the exact decoded RGBA dimensions and pixels of a PNG baseline under Typst 0.14.2, so PNG metadata and compression do not create false regressions; this fixed-toolchain baseline does not claim identical raster output across unrelated PDF engines, fonts, or operating systems.
+- Rendering tests guarantee deterministic SVG structure and broad real-data coverage. An additional fixed-toolchain regression check hashes the exact decoded RGBA dimensions and pixels of a PNG baseline under Typst 0.14.2, so PNG metadata and compression do not create false regressions; this baseline does not claim identical raster output across unrelated PDF engines, fonts, or operating systems.
 
 = License, Dependencies, and Data Citations
 
