@@ -6,7 +6,7 @@ status=0
 file_list=$(mktemp "${TMPDIR:-/tmp}/axodendron-markdown.XXXXXX")
 trap 'rm -f "$file_list"' EXIT HUP INT TERM
 
-find "$repository_dir" \( -path '*/.git' -o -path '*/target' \) -prune -o \
+find "$repository_dir" \( -path '*/.git' -o -path '*/.cache' -o -path '*/.typst-cache' -o -path '*/target' \) -prune -o \
   -type f -name '*.md' -print > "$file_list"
 while IFS= read -r file; do
   if ! awk '
