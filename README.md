@@ -240,4 +240,4 @@ AXODENDRON_WITH_NEUROMORPHO=1 ./scripts/check.sh
 
 ## License
 
-Axodendron source is [MIT](LICENSE) licensed. The compiled WASM dependencies, optional CeTZ example dependency, and real-world SWC examples retain the licenses and attribution listed in [`package/THIRD_PARTY_NOTICES.md`](package/THIRD_PARTY_NOTICES.md).
+Axodendron source is [MIT](LICENSE) licensed. The compiled WASM dependencies, optional CeTZ example dependency, and real-world SWC examples retain the licenses and attribution listed in [`package/THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
