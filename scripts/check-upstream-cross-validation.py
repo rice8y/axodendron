@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -14,7 +15,12 @@ import tempfile
 
 
 EXPECTED_NEUROM_VERSION = "4.0.5"
-EXPECTED_LMEASURE_VERSION = "5.2-revision-510"
+EXPECTED_LMEASURE_VERSIONS = {
+    "Darwin": "5.2-revision-510",
+    "Linux": "5.0-revision-434",
+    "Windows": "5.0-revision-434",
+}
+LMEASURE_FIXTURE_VERSIONS = "5.0-revision-434|5.2-revision-510"
 REPOSITORY = Path(__file__).resolve().parents[1]
 FIXTURE = REPOSITORY / "wasm-plugin" / "test-data" / "metric-cross-validation.tsv"
 
@@ -26,9 +32,10 @@ SWC_FIXTURES = {
 4 3 1 0 0 0.5 3
 5 3 0 1 0 0.5 3
 """,
-    # L-Measure 5.2 treats a one-point soma-to-neurite transition as an extra
-    # Pk_classic compartment. The soma-free form isolates the one intended
-    # binary neurite bifurcation; NeuroM uses the equivalent soma-bearing form.
+    # The pinned L-Measure platform binaries treat a one-point soma-to-neurite
+    # transition as an extra Pk_classic compartment. The soma-free form isolates
+    # the intended binary neurite bifurcation; NeuroM uses the equivalent
+    # soma-bearing form.
     "orthogonal-binary-lmeasure": """\
 1 3 -1 0 0 1.5 -1
 2 3 0 0 0 1 1
@@ -160,7 +167,7 @@ def locate_lmeasure() -> Path:
     return executable
 
 
-def lmeasure_value(executable: Path, swc: Path, temporary: Path) -> float:
+def lmeasure_value(executable: Path, swc: Path, temporary: Path) -> tuple[float, str]:
     output = temporary / "lmeasure-output.txt"
     request = temporary / "lmeasure-input.txt"
     request.write_text(
@@ -174,13 +181,29 @@ def lmeasure_value(executable: Path, swc: Path, temporary: Path) -> float:
         text=True,
     )
     banner = process.stdout + process.stderr
-    if "Release Lmv5.2" not in banner or "REVISION: 510" not in banner:
-        raise SystemExit("expected L-Measure 5.2 revision 510; received an unrecognized banner")
+    match = re.search(
+        r"REVISION:\s*(?P<revision>\d+)\s+Release\s+Lmv(?P<version>\d+(?:\.\d+)*)",
+        banner,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise SystemExit(f"could not parse the L-Measure version banner: {banner!r}")
+    observed_version = (
+        f"{match.group('version')}-revision-{match.group('revision')}"
+    )
+    system = platform.system()
+    expected_version = EXPECTED_LMEASURE_VERSIONS.get(system)
+    if expected_version is None:
+        raise SystemExit(f"unsupported L-Measure validation platform: {system}")
+    if observed_version != expected_version:
+        raise SystemExit(
+            f"expected L-Measure {expected_version} on {system}, found {observed_version}"
+        )
     line = output.read_text(encoding="ascii").strip()
     fields = line.split("\t")
     if len(fields) < 9 or fields[1].strip() != "Pk_classic":
         raise AssertionError(f"unexpected L-Measure Pk_classic output: {line!r}")
-    return float(fields[2])
+    return float(fields[2]), observed_version
 
 
 def load_rows() -> list[dict[str, str]]:
@@ -203,16 +226,19 @@ def main() -> None:
             paths[name] = path
 
         observed = neurom_values(paths)
-        observed["rall-ratio"] = [
-            lmeasure_value(locate_lmeasure(), paths["orthogonal-binary-lmeasure"], temporary)
-        ]
+        rall_ratio, lmeasure_version = lmeasure_value(
+            locate_lmeasure(), paths["orthogonal-binary-lmeasure"], temporary
+        )
+        observed["rall-ratio"] = [rall_ratio]
 
         for row in rows:
             metric_id = row["metric_id"]
             if row["definition_version"] != "1":
                 raise AssertionError(f"{metric_id}: unexpected definition version")
             expected_version = (
-                EXPECTED_NEUROM_VERSION if row["upstream"] == "NeuroM" else EXPECTED_LMEASURE_VERSION
+                EXPECTED_NEUROM_VERSION
+                if row["upstream"] == "NeuroM"
+                else LMEASURE_FIXTURE_VERSIONS
             )
             if row["upstream_version"] != expected_version:
                 raise AssertionError(f"{metric_id}: fixture upstream version is not pinned")
@@ -240,7 +266,7 @@ def main() -> None:
 
     print(
         f"verified {len(rows)} metric definitions against NeuroM {EXPECTED_NEUROM_VERSION} "
-        f"and L-Measure {EXPECTED_LMEASURE_VERSION}"
+        f"and L-Measure {lmeasure_version}"
     )
 
 
