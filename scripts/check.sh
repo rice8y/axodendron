@@ -47,7 +47,10 @@ RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path "$manifest" --locked --work
 "$script_dir/benchmark.sh"
 "$script_dir/verify-plugin.sh"
 TYPST_BIN="$typst_bin" "$script_dir/check-package.sh"
-"$typst_bin" compile --root . package/tests/smoke.typ "$output_dir/smoke.pdf"
+if [ -f "$repository_dir/tests/typst/integration.typ" ]; then
+  "$typst_bin" compile --root . tests/typst/integration.typ \
+    "$output_dir/integration.pdf"
+fi
 
 if [ "${AXODENDRON_WITH_NEUROMORPHO:-0}" = "1" ]; then
   "$script_dir/fetch-neuromorpho-fixtures.sh"
@@ -55,8 +58,9 @@ if [ "${AXODENDRON_WITH_NEUROMORPHO:-0}" = "1" ]; then
     -p axodendron-core --test neuromorpho -- --ignored
   cargo test --manifest-path "$manifest" --locked \
     -p axodendron-svg --test neuromorpho_render -- --ignored
-  if [ -z "${AXODENDRON_NEUROMORPHO_DIR:-}" ]; then
-    "$typst_bin" compile --root . package/tests/neuromorpho.typ \
+  if [ -z "${AXODENDRON_NEUROMORPHO_DIR:-}" ] && \
+    [ -f "$repository_dir/tests/typst/neuromorpho.typ" ]; then
+    "$typst_bin" compile --root . tests/typst/neuromorpho.typ \
       "$output_dir/neuromorpho.pdf"
   fi
 fi

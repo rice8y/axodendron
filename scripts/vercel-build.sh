@@ -19,15 +19,17 @@ if [ ! -d "$docs_root" ]; then
   exit 1
 fi
 
-echo "[build] replacing starter package with top-level files from axodendron package"
+echo "[build] replacing starter package with Axodendron package sources"
 rm -rf "${docs_root}/package"
-mkdir -p "${docs_root}/package"
+mkdir -p "${docs_root}/package/src"
 
 find package \
   -mindepth 1 \
   -maxdepth 1 \
   -type f \
   -exec cp -p {} "${docs_root}/package/" \;
+
+cp -R package/src/. "${docs_root}/package/src/"
 
 export PATH="$repo_root/.bin:$HOME/.cargo/bin:/rust/bin:$PATH"
 

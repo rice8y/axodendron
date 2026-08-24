@@ -1,6 +1,6 @@
 [package]
 name = "axodendron"
-version = "0.1.0"
+version = "0.1.1"
 entrypoint = "lib.typ"
 authors = ["Eito Yoneyama"]
 license = "MIT"
@@ -10,4 +10,4 @@ keywords = ["neuroscience", "morphology", "swc", "visualization"]
 categories = ["visualization"]
 disciplines = ["biology"]
 compiler = "0.14.0"
-exclude = ["/docs", "/images", "/tests", "/justfile"]
+exclude = ["/docs", "/images", "/justfile"]

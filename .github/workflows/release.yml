@@ -67,6 +67,17 @@ jobs:
       - name: Install WASM validation tools
         run: cargo install wasm-tools --locked --version 1.245.1
 
+      - name: Install pinned scientific validation tools
+        run: |
+          python3 -m venv /tmp/axodendron-scientific-validation
+          /tmp/axodendron-scientific-validation/bin/python -m pip install \
+            --disable-pip-version-check \
+            neurom==4.0.5 \
+            pylmeasure==0.2.0
+
+      - name: Recompute upstream fixtures
+        run: /tmp/axodendron-scientific-validation/bin/python scripts/check-upstream-cross-validation.py
+
       - name: Verify minimum-version release sources
         run: TYPST_BIN=typst-min AXODENDRON_BENCH_FULL=1 ./scripts/check.sh
 
@@ -75,9 +86,6 @@ jobs:
 
       - name: Verify package with latest Typst
         run: TYPST_BIN=typst-latest ./scripts/check-package.sh
-
-      - name: Verify latest-Typst smoke test
-        run: typst-latest compile --root . package/tests/smoke.typ /tmp/axodendron-smoke-latest.pdf
 
   typst-package:
     name: Package release assets

@@ -20,6 +20,36 @@
 #let sst-analysis = swc.analyze(sst-cell)
 #let vipr2-analysis = swc.analyze(vipr2-cell)
 
+#let aa-local-angle = swc.measure(aa-cell, metrics: "local-bifurcation-angle").first()
+#let aa-angle-nodes = swc.field-to-nodes(
+  aa-cell,
+  field: aa-local-angle,
+  placement: "bifurcation-branch",
+  reducer: "mean",
+)
+#let aa-angle-min = calc.min(..aa-angle-nodes.data.value.values)
+#let aa-angle-max = calc.max(..aa-angle-nodes.data.value.values)
+#let sst-tmd = swc.tmd(sst-cell, filtration: "root-path-length")
+#let sst-tmd-scale = swc.persistence-scale(sst-tmd)
+#let example-population = swc.population((
+  swc.population-entry("AA0109", cell: aa-cell),
+  swc.population-entry("Nr5a1", cell: nr5a1-cell),
+  swc.population-entry("Sst", cell: sst-cell),
+))
+#let example-features = swc.feature-table(
+  example-population,
+  columns: (
+    swc.feature-column("fractional-anisotropy", name: "FA"),
+    swc.feature-column(
+      "local-bifurcation-angle",
+      name: "mean local angle",
+      aggregate: "mean",
+      missing-policy: "omit",
+    ),
+    swc.feature-column("centroid", name: "centroid x", component: "x"),
+  ),
+)
+
 #let field-maximum(field) = field.values.fold(0, (current, value) => calc.max(current, value))
 #let aa-branch-maximum = field-maximum(aa-analysis.branch_order)
 #let aa-path-maximum = calc.ceil(field-maximum(aa-analysis.root_path_length))
@@ -121,6 +151,14 @@
       field-maximum: field-maximum,
       aa-branch-maximum: aa-branch-maximum,
       aa-path-maximum: aa-path-maximum,
+      aa-local-angle: aa-local-angle,
+      aa-angle-nodes: aa-angle-nodes,
+      aa-angle-min: aa-angle-min,
+      aa-angle-max: aa-angle-max,
+      sst-tmd: sst-tmd,
+      sst-tmd-scale: sst-tmd-scale,
+      example-population: example-population,
+      example-features: example-features,
     ),
   ),
   theme: manual-theme,
@@ -138,7 +176,7 @@ Import `axodendron`, read an SWC file as bytes, validate it, and pass the result
 
 #example[
   ```typ
-  #import "@preview/axodendron:0.1.0" as swc
+  #import "@preview/axodendron:0.1.1" as swc
 
   #let cell = swc.load(
     read("Sst-IRES-Cre_Ai14-188740-03-02-01_491119369_m.kp12.swc", encoding: none),
@@ -154,7 +192,7 @@ Import `axodendron`, read an SWC file as bytes, validate it, and pass the result
   )
 ]
 
-The examples below assume `#import "@preview/axodendron:0.1.0" as swc`. Code snippets treat the directory containing the selected `.swc` file as the caller root. This manual keeps its Typst sources and data separate, so its executable setup reads the same files from `examples/data/`.
+The examples below assume `#import "@preview/axodendron:0.1.1" as swc`. Code snippets treat the directory containing the selected `.swc` file as the caller root. This manual keeps its Typst sources and data separate, so its executable setup reads the same files from `examples/data/`.
 
 On Typst 0.15.0 and later, @cmd:load[-] can receive `path("AA0109.CNG.swc")` directly. Axodendron reads the path inside the package call while retaining caller-relative resolution. This manual uses `read(..., encoding: none)` because the minimum supported compiler is Typst 0.14.0 and the documentation toolchain is pinned to Typst 0.14.2.
 
@@ -209,10 +247,10 @@ A successful load returns a dictionary containing `valid`, `diagnostics`, `finge
     table.header([*Surface*], [*Minimum*], [*Coverage*]),
     [Typst package with string or bytes input],
     [`0.14.0`],
-    [CI compiles the complete package and smoke suite on the minimum and latest configured Typst versions],
+    [CI compiles every bundled example through the package boundary on the minimum and latest configured Typst versions],
     [Typst `path(...)` input],
     [`0.15.0`],
-    [A version-gated smoke assertion loads a real file through `path(...)`],
+    [Version-gated integration verification loads a real file through `path(...)`],
     [Rust workspace],
     [`1.85.0`],
     [Ubuntu minimum plus stable Rust on Ubuntu, macOS, and Windows],
@@ -224,7 +262,7 @@ A successful load returns a dictionary containing `valid`, `diagnostics`, `finge
 
 The package is split into a format-independent Rust core, an SVG renderer, and a thin Typst minimal-protocol adapter. The WASM plugin is pure and stateless: it cannot access files, clocks, randomness, environment variables, or the network. Equal request bytes produce equal response bytes.
 
-The wire boundary uses deterministic CBOR with `api_version: 1`. Morphology payload schema 2 serializes canonical arrays, provenance, and fingerprints; derived children, roots, components, lookup maps, and soma classification are rebuilt and validated on every decode.
+The wire boundary uses deterministic CBOR with `protocol_version: 2`. Morphology payload schema 2 serializes canonical arrays, provenance, and fingerprints; derived children, roots, components, lookup maps, and soma classification are rebuilt and validated on every decode.
 
 = Example Data, Attribution, and License
 
@@ -270,7 +308,7 @@ This manual uses four standardized real SWC reconstructions from NeuroMorpho.Org
 ]
 
 #info-alert[
-  The real files are included only as attributed documentation and README examples. Their source URLs, SHA-256 checksums, archive names, original studies, and license are also recorded in `THIRD_PARTY_NOTICES.md`. The separate 30-case regression corpus remains an ignored, checksum-verified private cache and is not distributed.
+  The real files are included only as attributed documentation and README examples. Their source URLs, SHA-256 checksums, archive names, original studies, and license are also recorded in `THIRD_PARTY_NOTICES.md`. The separate 30-case regression corpus is kept in a checksum-verified local cache and is not distributed.
 ]
 
 = Validation and Provenance
@@ -414,6 +452,141 @@ No end caps are added. A non-positive endpoint radius makes aggregate surface ar
 
 A single-point soma exposes sphere area and volume. A valid NeuroMorpho three-point soma exposes equivalent-sphere values and the encoded cylinder's lateral area and volume. Equal radii, endpoint distance, and endpoint opposition use a 1% scale-relative tolerance. Other soma encodings do not receive invented scalar metrics.
 
+= Versioned Metric System
+
+@cmd:measure[-] complements the fixed @cmd:analyze[-] bundle with individually versioned metrics. A request uses one common selection query, and each returned `MetricResult` records the stable metric ID, an independent definition version, all resolved parameters, morphology/topology/selection fingerprints, implementation provenance, a tagged data container, and explicit missing values.
+
+The data tag is one of `morphology-metric`, `node-field`, `section-field`, or `bifurcation-field`. A bifurcation key records the branch node and the participating child sections, so pairwise values remain unambiguous at multifurcations. A section key is intentionally transient: it includes the topology fingerprint, selection fingerprint, section-definition revision, boundary policy, and proximal/distal node IDs. It must not be persisted as an identity independent of those fields.
+
+#warning-alert[
+  Missing values are not encoded as an unexplained `none`. Every undefined entity carries a reason such as `non-binary-bifurcation`, `zero-length`, `non-positive-radius`, or `degenerate`, plus a detail string. Do not discard this information when aggregating results.
+]
+
+== Selection and Explicit Field Conversion
+
+The common selection query combines `domain`, `kinds`, subtree `roots`, and explicit `nodes`. The result is always an induced forest: an original edge is included only when both endpoints survive. Topology-aware selectors return roots, branch points, terminals, soma nodes, or nodes constrained by centrifugal branch order or Strahler order under exactly the same query semantics. Orders are computed after applying the query, so they describe the selected induced forest rather than a hidden full-cell topology.
+
+@cmd:branch-order[-] and @cmd:strahler-order[-] construct selectors with one exact positive order or an inclusive `min`/`max` interval. Their convenience wrappers @cmd:branch-order-nodes[-] and @cmd:strahler-order-nodes[-] return IDs directly. Exact and range constraints are mutually exclusive; zero, negative, and inverted ranges are rejected.
+
+Section and bifurcation values are not node fields. Use @cmd:field-to-nodes[-] with an explicit placement and collision reducer before passing them to `color-by`. The default reducer is `error`; this prevents pairwise bifurcation values from being silently collapsed at a multifurcation.
+
+#example[
+  ```typ
+  #let angle = swc.measure(
+    cell,
+    metrics: swc.metric(
+      "local-bifurcation-angle",
+      multifurcation: "pairwise",
+    ),
+  ).first()
+  #let at-branches = swc.field-to-nodes(
+    cell,
+    field: angle,
+    placement: "bifurcation-branch",
+    reducer: "mean",
+  )
+
+  #swc.render(cell, color-by: at-branches, colormap: "magma")
+  ```
+][
+  #attributed(
+    swc.render(
+      aa-cell,
+      color-by: aa-angle-nodes,
+      colormap: "magma",
+      minimum: aa-angle-min,
+      maximum: aa-angle-max,
+      width: 130mm,
+      height: 97.5mm,
+      display-tolerance: 1,
+      color-bar: swc.color-bar(
+        min: aa-angle-min,
+        max: aa-angle-max,
+        label: [local bifurcation angle (degrees)],
+        position: top + right,
+      ),
+    ),
+    aa-source,
+  )
+]
+
+== Branch and Section Definitions
+
+#{
+  set par(justify: false)
+  set text(size: 8.2pt)
+  table(
+    columns: (1.45fr, 2.75fr),
+    inset: 4.5pt,
+    align: left,
+    table.header([*Metric ID*], [*Definition*]),
+    [#breakable-mono("local-bifurcation-angle")], [Angle between the first non-zero outgoing child-segment vectors.],
+    [#breakable-mono("remote-bifurcation-angle")], [Angle between vectors from the branch node to the distal endpoints of the outgoing sections.],
+    [#breakable-mono("sibling-ratio")], [$min(d_1,d_2) / max(d_1,d_2)$ for positive child diameters; the sampling rule is recorded.],
+    [#breakable-mono("partition-asymmetry-terminal")], [$abs(N_1-N_2)/(N_1+N_2-2)$ using selected-subtree terminal counts; two terminal children are defined as zero.],
+    [#breakable-mono("diameter-power-ratio")], [$sum_i d_i^p / d_0^p$ for every outgoing child; `p` and diameter sampling are recorded.],
+    [#breakable-mono("rall-ratio")], [Alias of the diameter-power ratio with default $p=3/2$. A value of one satisfies that parameterized relation.],
+    [#breakable-mono("taper-rate")], [Signed slope of radius or diameter against cumulative section path length; ordinary least squares is the default and endpoint difference is optional.],
+    [#breakable-mono("segment-meander-angle")], [Turning angle between consecutive non-zero outward segment vectors: zero is locally straight and 180 degrees is reversal.],
+  )
+}
+
+Angles are serialized in degrees on $[0,180]$. Pairwise processing is the default for multifurcations and is recorded in the key; choose `multifurcation: "exclude"` when a binary-only definition is required. Sibling ratio follows the smaller-over-larger convention on $[0,1]$. Diameter power ratios include all outgoing children and require positive parent and child diameters.
+
+The taper result is signed: negative means narrowing from root toward tip. `taper-quantity: "diameter"` is the default, while `"radius"` is a distinct resolved definition. The fitted abscissa is cumulative three-dimensional path distance at the original SWC samples; no resampling or smoothing occurs.
+
+NeuroM's `section_meander_angles` uses the supplementary opening-angle convention, where a straight continuation is $pi$ radians. Axodendron's turning angle is therefore 180 degrees minus the NeuroM opening angle after conversion to degrees. This convention transform and NeuroM's radians-to-degrees transform are recorded explicitly in the cross-validation fixture rather than described as exact definition equality.
+
+== Basic Versioned Metrics
+
+#{
+  set par(justify: false)
+  set text(size: 8.2pt)
+  table(
+    columns: (1.45fr, 0.75fr, 2fr),
+    inset: 4.5pt,
+    align: left,
+    table.header([*Metric IDs*], [*Support*], [*Definition*]),
+    [#breakable-mono("node-count, branch-point-count, terminal-count, section-count")], [Morphology], [Counts in the selected induced forest.],
+    [#breakable-mono("total-cable-length, maximum-root-path-length")], [Morphology], [Stable three-dimensional edge sum and maximum selected-root path distance.],
+    [#breakable-mono("neurite-surface-area, neurite-volume")], [Morphology], [Uncapped-frustum aggregates; any non-positive endpoint radius yields explicit missing records rather than a partial total.],
+    [#breakable-mono("root-path-length, radial-distance")], [Node], [Distance from each selected induced-arbor root.],
+    [#breakable-mono("branch-order, strahler-order")], [Node], [Discrete topology fields on the selected forest.],
+    [#breakable-mono("section-length, section-contraction")], [Section], [Section path length and endpoint distance divided by path length.],
+  )
+}
+
+These metrics use the same tagged `MetricResult`, selection fingerprints, definition versions, missing reasons, and population aggregation rules as definition-sensitive branch metrics. The fixed @cmd:analyze[-] bundle remains convenient for a broad report, while @cmd:measure[-] is the comparable and provenance-bearing interface.
+
+== Spatial Metrics and Principal Frames
+
+#{
+  set par(justify: false)
+  set text(size: 8.2pt)
+  table(
+    columns: (1.4fr, 2.8fr),
+    inset: 4.5pt,
+    align: left,
+    table.header([*Metric ID*], [*Support and interpretation*]),
+    [#breakable-mono("centroid")], [Node mean or exact continuous cable-length centroid.],
+    [#breakable-mono("bounding-box")], [Axis-aligned minimum and maximum of selected node centers; radii are excluded.],
+    [#breakable-mono("principal-extents")], [Full min-to-max spans of selected node centers in a deterministic principal frame.],
+    [#breakable-mono("fractional-anisotropy")], [Fractional anisotropy of the three spatial covariance eigenvalues.],
+    [#breakable-mono("convex-hull-2d-area")], [Projected node-center hull area in a coordinate or principal plane.],
+    [#breakable-mono("convex-hull-3d-surface-area")], [Surface area of the three-dimensional node-center hull.],
+    [#breakable-mono("convex-hull-3d-volume")], [Volume of the three-dimensional node-center hull.],
+    [#breakable-mono("volume-density")], [Selected uncapped-frustum volume divided by the three-dimensional node-center hull volume.],
+  )
+}
+
+Cable-length weighting analytically integrates the first and second moments of every selected line segment, rather than treating sample points as independent observations. Consequently, inserting collinear samples leaves the resulting centroid and covariance unchanged up to floating-point rounding. Node weighting is available when the sampling distribution itself is intentionally part of the statistic.
+
+@cmd:principal-frame[-] is a first-class result rather than a loose metric. It returns origin, centroid, ordered axes, covariance eigenvalues, extents, numerical rank, ambiguous-axis flags, and complete tolerance/sign/handedness provenance. Eigenvalues are ordered from largest to smallest. Axis signs use a deterministic farthest-projection rule with node-ID tie breaking, and the final basis is right-handed.
+
+Repeated or nearly repeated eigenvalues make individual axes scientifically non-identifiable. Axodendron reports that degeneracy using $epsilon_a + epsilon_r max(lambda_i,lambda_j,1)$; it does not imply a biologically meaningful orientation merely because a reproducible numerical basis can be chosen. @cmd:pca-align[-] rejects such a frame unless `allow-degenerate: true` is explicit.
+
+Named render projections `"principal-xy"`, `"principal-xz"`, and `"principal-yz"` compute the default cable-weighted frame and project without modifying the morphology. Use `swc.pca-align` only when a transformed SWC-compatible coordinate set is actually required.
+
 = Sholl Analysis
 
 @cmd:sholl[-] intersects original 3D segments with spheres. @cmd:sholl-2d[-] first applies the chosen physical orthographic projection, then intersects the projected segments with circles. Display simplification is never used for either calculation.
@@ -449,6 +622,40 @@ The default center is the represented soma center, or the sole root when no soma
 = Pure Transformations
 
 Every transformation returns a new cell. The input remains unchanged. Results include `transform-report`, `mapping`, and `lineage`; the report records source/result fingerprints, node counts, removed and inserted IDs, cable-length change, and any guaranteed deviation bound.
+
+== SWC-Compatible Geometry
+
+@cmd:translate[-], @cmd:rotate[-], @cmd:uniform-scale[-], @cmd:reflect[-], @cmd:center-morphology[-], and @cmd:pca-align[-] preserve circular SWC radius semantics. Translation, rotation, reflection, centering, and principal alignment keep radii unchanged. Uniform scaling multiplies coordinates and radii by the same positive factor. Topology, node IDs, kinds, and parent links are preserved.
+
+#example[
+  ```typ
+  #let centered = swc.center-morphology(cell, by: "centroid")
+  #let frame = swc.principal-frame(centered, origin: "centroid")
+  #let aligned = swc.pca-align(centered, frame: frame)
+  #let rotated = swc.rotate(
+    aligned,
+    axis: (0, 0, 1),
+    angle: 15deg,
+  )
+  ```
+][
+  #let centered = swc.center-morphology(aa-cell, by: "centroid")
+  #let frame = swc.principal-frame(centered, origin: "centroid")
+  #let aligned = swc.pca-align(centered, frame: frame)
+  #let rotated = swc.rotate(aligned, axis: (0, 0, 1), angle: 15deg)
+  #attributed(
+    swc.render(rotated, width: 130mm, height: 97.5mm, display-tolerance: 1),
+    aa-source,
+  )
+]
+
+== General Affine Geometry
+
+@cmd:affine-transform[-] is deliberately separate. A non-similarity affine map turns a circular cross-section into an ellipse, which SWC cannot encode. The caller must choose `radius-policy: "preserve"` or `"volume-equivalent"`; the transform report records the matrix, determinant, applied radius scale, policy, and `radius-representation-lossy: true`. Singular and non-finite transforms are rejected.
+
+#warning-alert[
+  General affine output is a centerline transform with an explicitly approximate radius representation. Do not describe it as an exact geometric transform of neuronal volume or membrane surface.
+]
 
 == Selection and Extraction
 
@@ -548,6 +755,129 @@ Simplification is also available as the display-only #arg[display-tolerance] opt
 == Deterministic Export
 
 @cmd:export-swc[-] emits canonical SWC with a deterministic header, topological row order, and sequential IDs. Single-root results satisfy `incf-strict`; forests retain every root and must be reloaded with `permissive` unless they are connected separately by the caller.
+
+= Topology Visualization
+
+@cmd:render-tree[-] draws the selected rooted forest independently of physical projection. Horizontal placement follows stable input/child order and leaf allocation. Vertical depth is one of topological edge depth, root path length, or Euclidean radial distance from each selected arbor root.
+
+Strahler order and centrifugal branch order are discrete attributes, not interchangeable continuous distances. They belong in `color-by`; they are deliberately not accepted as `depth` modes.
+
+#example[
+  ```typ
+  #let metrics = swc.analyze(cell)
+
+  #swc.render-tree(
+    cell,
+    depth: "path-length",
+    color-by: metrics.strahler_order,
+  )
+  ```
+][
+  #attributed(
+    swc.render-tree(
+      sst-cell,
+      depth: "path-length",
+      color-by: sst-analysis.strahler_order,
+      width: 130mm,
+      height: 97.5mm,
+      canvas-width: 800,
+      canvas-height: 600,
+    ),
+    sst-source,
+  )
+]
+
+The tree report names its depth rule explicitly. The renderer uses the same query layer and node-field fingerprint checks as physical rendering, and its returned node anchors can be used with the same CeTZ leader-label API.
+
+= Topological Morphology Descriptor
+
+@cmd:tmd[-] computes terminal-to-merge persistence pairs with the elder rule of the Topological Morphology Descriptor. `filtration: "root-path-length"` is monotone away from each selected arbor root, which has path distance zero; `center` is therefore inapplicable and rejected. `"radial-distance"` uses Euclidean distance from `center: "soma"` (the default) or `center: "root"` and can be non-monotone along a traced branch.
+
+For each merge, the component with the larger terminal filtration survives; an exact tie is resolved by the lower terminal node ID. One essential survivor is retained per selected arbor. Every pair stores birth, death, absolute persistence, sorted display endpoints, terminal, merge, arbor root, essential status, and a `non_monotone` flag.
+
+The returned pair array, and therefore barcode rows, is deterministic: arbor-root ID ascending, essential survivor first, birth descending, death descending, terminal-node ID ascending, then merge-node ID ascending. The exact rule is also stored in `provenance.pair_order`; the original TMD paper otherwise treats the barcode's vertical order as arbitrary.
+
+#warning-alert[
+  A radial terminal may lie closer to the origin than an upstream merge. Axodendron reports such pairs through `non-monotone-pair-count` and preserves signed birth/death ordering instead of clamping, discarding, or silently redefining the filtration. Treat these as disclosed terminal–branch TMD pairs, not as evidence that radial distance was monotone.
+]
+
+#example[
+  ```typ
+  #let descriptor = swc.tmd(
+    cell,
+    filtration: "root-path-length",
+  )
+  #let scale = swc.persistence-scale(descriptor)
+
+  #grid(
+    columns: 2,
+    swc.persistence-barcode(descriptor, scale: scale),
+    swc.persistence-diagram(descriptor, scale: scale),
+  )
+  #swc.persistence-legend()
+  ```
+][
+  #block(breakable: false)[
+    #attributed(
+      stack(
+        dir: ttb,
+        spacing: 2mm,
+        grid(
+          columns: (1fr, auto),
+          gutter: 6mm,
+          swc.persistence-barcode(sst-tmd, width: 80mm, height: 43mm, scale: sst-tmd-scale),
+          swc.persistence-diagram(sst-tmd, size: 43mm, scale: sst-tmd-scale),
+        ),
+        align(center, swc.persistence-legend()),
+      ),
+      sst-source,
+    )
+  ]
+]
+
+Birth is horizontal and death vertical, matching the original TMD publication. Both plots use the same explicit physical scale, label it in the morphology's units, and apply blue to ordinary pairs and red only to the essential survivor retained for each selected arbor. Native renderers inset endpoint strokes and points from their clipped bounds. Essential bars remain finite root-to-terminal intervals rather than infinity. These conventions are recorded in provenance and must be matched across TMD implementations.
+
+= Population Features
+
+@cmd:population[-] retains named morphologies, while @cmd:feature-table[-] evaluates a common query and feature specification for every row. The primary result is Typst-native arrays and dictionaries. @cmd:feature-table-csv[-] is a separate text export; missing CSV cells are empty, so the Typst result remains the authoritative source for missing reasons.
+
+Morphology scalars must not specify an aggregate. Node, section, and bifurcation fields must specify one. Vector and box morphology metrics require one explicit `component`: `x`, `y`, or `z` for a centroid; `major`, `middle`, or `minor` for principal extents; and `min-x` through `span-z` for a bounding box. This avoids silently flattening structured scientific results. Field aggregation is strict by default: if any selected entity is undefined, the cell is missing with reason `partial-field`. `missing-policy: "omit"` is an explicit instruction to aggregate only defined entities. Columns are rejected if their resolved metric definition, parameters, units, support, aggregate, or component differ across rows.
+
+#example[
+  ```typ
+  #let features = swc.feature-table(
+    cells,
+    columns: (
+      swc.feature-column("fractional-anisotropy", name: "FA"),
+      swc.feature-column("local-bifurcation-angle",
+        aggregate: "mean", missing-policy: "omit"),
+      swc.feature-column("centroid", component: "x"),
+    ),
+  )
+  ```
+][
+  #let show-feature(cell) = if cell.status == "value" {
+    str(calc.round(cell.value, digits: 3))
+  } else {
+    "missing: " + cell.reason
+  }
+  #attributed(
+    table(
+      columns: (1.15fr, 0.65fr, 1.35fr, 0.85fr),
+      inset: 5pt,
+      table.header([*Morphology*], [*FA*], [*Mean local angle*], [*Centroid x*]),
+      ..example-features.rows.map(row => (
+        [#row.id],
+        [#show-feature(row.values.at(0))],
+        [#show-feature(row.values.at(1))],
+        [#show-feature(row.values.at(2))],
+      )).flatten(),
+    ),
+    [#aa-source #nr5a1-source #sst-source],
+  )
+]
+
+Summaries report valid and missing row counts, mean, median, minimum, maximum, and both sample and population variance. No inferential statistic, imputation, unit conversion, or correction for repeated measurements is performed automatically.
 
 = Rendering
 
@@ -723,7 +1053,7 @@ CeTZ leader labels keep the text box away from morphology geometry while an arro
 
 #example[
   ```typ
-  #import "@preview/axodendron:0.1.0" as swc
+  #import "@preview/axodendron:0.1.1" as swc
   #import "@preview/cetz:0.5.2"
 
   #swc.render(
@@ -811,16 +1141,23 @@ Plugin errors are structured before the Typst wrapper turns them into readable p
 #{
   set par(justify: false)
   table(
-    columns: (0.75fr, 2.8fr),
+    columns: (1.1fr, 2.7fr),
     inset: 5pt,
     table.header([*Family*], [*Meaning*]),
-    [`API_*`], [Malformed CBOR or incompatible protocol],
-    [`PAYLOAD_*`], [Incompatible, forged, or internally inconsistent morphology payload],
-    [`SWC_*`], [Lexical, structural, or validation failure],
-    [`SHOLL_*`], [Invalid center, radius, domain, or projection],
-    [`TRANSFORM_*`], [Invalid node, component, tolerance, step, or ID space],
-    [`RENDER_*`], [Invalid canvas, style, scalar field, projection, or overlay],
-    [`LIMIT_*`], [Explicit bounded-resource failure],
+    [#breakable-mono("PROTOCOL_*")], [Malformed CBOR or incompatible protocol],
+    [#breakable-mono("PAYLOAD_*")], [Incompatible, forged, or internally inconsistent morphology payload],
+    [#breakable-mono("SWC_*")], [Lexical, structural, or validation failure],
+    [#breakable-mono("SHOLL_*")], [Invalid center, radius, domain, or projection],
+    [#breakable-mono("MEASURE_*")], [Unknown metric, invalid parameter, selection, or request size],
+    [#breakable-mono("PRINCIPAL_FRAME_*")], [Invalid or degenerate spatial frame],
+    [#breakable-mono("CENTER_*")], [Invalid or ambiguous center selection or geometry],
+    [#breakable-mono("QUERY_*")], [Invalid topology selector or selection query],
+    [#breakable-mono("FIELD_TO_NODES_*")], [Invalid explicit field conversion],
+    [#breakable-mono("TMD_*")], [Invalid filtration center, selection, or soma geometry],
+    [#breakable-mono("POPULATION_*")], [Invalid population size, column count, or comparability],
+    [#breakable-mono("TRANSFORM_*")], [Invalid node, component, tolerance, step, or ID space],
+    [#breakable-mono("RENDER_*")], [Invalid canvas, style, scalar field, projection, or overlay],
+    [#breakable-mono("LIMIT_*")], [Explicit bounded-resource failure],
   )
 }
 
@@ -835,7 +1172,7 @@ Plugin errors are structured before the Typst wrapper turns them into readable p
     [Decoded payload / encoded response], [128 MiB / 128 MiB],
     [Sholl radii], [10,000],
     [SVG result], [64 MiB],
-    [WASM artifact], [1 MiB],
+    [WASM artifact], [1.25 MiB],
     [Source package bundle], [4 MiB],
   )
 }
@@ -934,7 +1271,150 @@ The public string `version` reports the embedded plugin version. The public `swc
   Compute exact 2D circle intersections after the requested orthographic projection.
 ]
 
+#command("available-metrics", ret: array)[
+  Return the metric registry with stable IDs, independent definition versions, support entities, units, summaries, reference URLs, and machine-readable parameter schemas. Each parameter record includes its name, value type, default, allowed choices or numerical bound, conditional applicability, and summary.
+]
+
+#command(
+  "metric",
+  arg("id"),
+  arg(p: none),
+  arg(diameter-sampling: none),
+  arg(taper-quantity: none),
+  arg(taper-method: none),
+  arg(multifurcation: none),
+  arg(weighting: none),
+  arg(plane: none),
+  ret: dictionary,
+)[
+  Construct a parameterized metric specification. Supplied parameters that are unknown or irrelevant to the selected metric are rejected; accepted defaults and explicit values are serialized into the resolved metric identity.
+]
+
+#command(
+  "measure",
+  arg("cell"),
+  arg(metrics: none),
+  arg(domain: "neurites"),
+  arg(kinds: ()),
+  arg(roots: ()),
+  arg(nodes: ()),
+  arg(section-boundaries: "topology-and-type"),
+  ret: array,
+)[
+  Compute one or more versioned metrics over a common induced-forest selection and return tagged `MetricResult` dictionaries.
+]
+
+#command(
+  "principal-frame",
+  arg("cell"),
+  arg(origin: "centroid"),
+  arg(weighting: "cable-length"),
+  arg(domain: "neurites"),
+  arg(kinds: ()),
+  arg(roots: ()),
+  arg(nodes: ()),
+  arg(relative-tolerance: 1e-10),
+  arg(absolute-tolerance: 1e-12),
+  ret: dictionary,
+)[
+  Compute a deterministic, provenance-bearing principal coordinate frame and report rank or repeated-eigenvalue ambiguity.
+]
+
+#command("select-node-ids", arg("cell"), arg(selector: "all"), ret: array)[
+  Return IDs matching `all`, `roots`, `branch-points`, `terminals`, `soma`, or an order-selector dictionary under the common query arguments. `branch-points`, `terminals`, and `soma-nodes` are convenience wrappers.
+]
+
+#command("branch-order", arg(exact: none), arg(min: none), arg(max: none), ret: dictionary)[
+  Construct an exact or inclusive-range centrifugal branch-order selector. @cmd:branch-order-nodes[-] applies it directly to one morphology.
+]
+
+#command("strahler-order", arg(exact: none), arg(min: none), arg(max: none), ret: dictionary)[
+  Construct an exact or inclusive-range Strahler-order selector. @cmd:strahler-order-nodes[-] applies it directly to one morphology.
+]
+
+#command("branch-order-nodes", arg("cell"), arg(exact: none), arg(min: none), arg(max: none), ret: array)[
+  Return IDs matching a centrifugal branch-order constraint under the common query arguments.
+]
+
+#command("strahler-order-nodes", arg("cell"), arg(exact: none), arg(min: none), arg(max: none), ret: array)[
+  Return IDs matching a Strahler-order constraint under the common query arguments.
+]
+
+#command("field-to-nodes", arg("cell"), arg(field: none), arg(placement: none), arg(reducer: "error"), ret: dictionary)[
+  Explicitly project a section or bifurcation field to nodes. Valid placements are section proximal/distal/broadcast and bifurcation branch/children; reducers are `error`, `mean`, `minimum`, `maximum`, or `sum`.
+]
+
+#command("tmd", arg("cell"), arg(filtration: "radial-distance"), arg(center: auto), ret: dictionary)[
+  Compute versioned terminal–merge TMD pairs under radial-distance or root-path-length filtration. Radial distance defaults to the soma and accepts `center: "soma"` or `center: "root"`; root-path length is measured from each selected arbor root and rejects a center. The common domain/kind/root/node selection arguments are also accepted.
+]
+
+#command("persistence-scale", arg("descriptor"), arg(min: none), arg(max: none), ret: dictionary)[
+  Resolve a physical scale that can be passed to both persistence plots. Explicit bounds must contain every birth and death value.
+]
+
+#command("persistence-barcode", arg("descriptor"), arg(width: 80mm), arg(height: 70mm), arg(row-height: none), arg(scale: none), ret: content)[
+  Render every TMD pair in provenance-defined row order with a labeled filtration axis. The default distributes rows within #arg[height]; an explicit #arg[row-height] requests fixed spacing and determines total height.
+]
+
+#command("persistence-diagram", arg("descriptor"), arg(size: 70mm), arg(scale: none), arg(radius: 1.4pt), ret: content)[
+  Render TMD birth/death points with Birth on the horizontal axis, Death on the vertical axis, and physical units on both axes.
+]
+
+#command("persistence-legend", ret: content)[
+  Render the shared plot key: blue for ordinary pairs and red for the essential survivor retained once per selected arbor.
+]
+
+== Population Tables
+
+#command("population-entry", arg("id"), arg(cell: none), ret: dictionary)[
+  Construct one named population row.
+]
+
+#command("population", arg("entries"), ret: array)[
+  Validate a Typst array of population entries without performing analysis.
+]
+
+#command("feature-column", arg("metric"), arg(name: none), arg(aggregate: none), arg(component: none), arg(missing-policy: "strict"), ret: dictionary)[
+  Construct a comparable scalar feature column. Structured morphology metrics require an explicit component; field aggregates are `mean`, `median`, `minimum`, `maximum`, `sum`, `sample-variance`, or `population-variance`; missing policy is `strict` or explicit `omit`.
+]
+
+#command("feature-table", arg("population"), arg(columns: none), ret: dictionary)[
+  Evaluate common metric/query definitions, enforce parameter and unit compatibility, retain missing reasons, and compute descriptive summaries.
+]
+
+#command("feature-table-csv", arg("table"), ret: str)[
+  Serialize the scalar table as RFC 4180-style CSV text without performing file I/O.
+]
+
 == Selection and Transformations
+
+#command("translate", arg("cell"), arg(offset: none), ret: "cell")[
+  Translate coordinates by a three-dimensional morphology-unit offset.
+]
+
+#command("rotate", arg("cell"), arg(axis: none), arg(angle: none), arg(center: (0, 0, 0)), ret: "cell")[
+  Apply a right-handed axis-angle rotation; numeric angles are radians and Typst angle values are accepted directly.
+]
+
+#command("uniform-scale", arg("cell"), arg(factor: none), arg(center: (0, 0, 0)), ret: "cell")[
+  Apply one positive factor to coordinates and radii about a fixed center.
+]
+
+#command("reflect", arg("cell"), arg(normal: none), arg(point: (0, 0, 0)), ret: "cell")[
+  Reflect coordinates across a plane while preserving circular radii.
+]
+
+#command("center-morphology", arg("cell"), arg(by: "soma"), arg(target: (0, 0, 0)), ret: "cell")[
+  Translate a soma center or selected centroid to a target coordinate.
+]
+
+#command("pca-align", arg("cell"), arg(frame: none), arg(allow-degenerate: false), ret: "cell")[
+  Express coordinates in a matching principal frame; ambiguous frames require an explicit opt-in.
+]
+
+#command("affine-transform", arg("cell"), arg(matrix: none), arg(translation: (0, 0, 0)), arg(radius-policy: "preserve"), ret: "cell")[
+  Apply an invertible general affine centerline transform with explicit lossy SWC radius policy.
+]
 
 #command("select-nodes", arg("cell"), arg(nodes: none), ret: "cell")[
   Select exactly the listed node IDs as an induced forest.
@@ -1243,6 +1723,20 @@ The public string `version` reports the embedded plugin version. The public `swc
   ]
 ]
 
+#command(
+  "render-tree",
+  arg("cell"),
+  arg(depth: "topological"),
+  arg(color-by: "type"),
+  arg(domain: "neurites"),
+  arg(width: 120mm),
+  arg(height: 90mm),
+  arg(return-report: false),
+  ret: content,
+)[
+  Render an abstract rooted forest. Depth is `topological`, `path-length`, or `radial-distance`; branch and Strahler orders are supplied as discrete color fields. The full function also accepts the common selection, canvas, node-anchor, and CeTZ-label arguments documented for physical rendering.
+]
+
 = Result Schemas
 
 == Analysis Bundle
@@ -1251,9 +1745,25 @@ The analysis bundle contains `schema-version`, `definition-version`, `fingerprin
 
 The summary includes raw/domain node counts, edges, roots, components, branches, terminals, sections, total cable length, maximum path and radial distances, bounding box, type counts and metrics, per-arbor metrics, radius metrics, soma metrics and class, and units.
 
+== Metric Result
+
+A `MetricResult` contains `schema_version`, `metric`, `selection`, `source`, `provenance`, `data`, and `missing`. `metric` separates `id`, `definition_version`, and resolved `parameters`. `source` contains morphology, topology, and selection fingerprints. `data.kind` is a tagged support type; its `value` contains aligned entity keys, values, and units. `missing` contains explicit entity/reason/detail records.
+
+== Principal Frame
+
+A principal frame contains matching morphology and topology fingerprints, the resolved selection and weighting, origin mode and coordinate, centroid, three ordered axes and eigenvalues, min/max extents, rank, ambiguous-axis flags, and provenance containing definition version, covariance model, sign and handedness rules, tolerances, and selection fingerprint.
+
+== TMD Result
+
+A TMD result contains schema and definition provenance, matching fingerprints, query, filtration, optional radial center, units, node-aligned filtration values, persistence pairs, and the non-monotone pair count. Definition version `2` makes each selected arbor root zero for root-path length and forbids a center for that filtration. `provenance.pair_order` records the deterministic barcode order. Essential and radial non-monotone conventions are explicit fields rather than implicit plotting behavior.
+
+== Feature Table
+
+A feature table contains versioned column metadata, rows with morphology fingerprints and tagged value/missing cells, and descriptive summaries. Column metadata retains the metric descriptor, aggregate, structured component, missing policy, and units.
+
 == Transform Result
 
-Transformed cells add `transform-report`, `mapping`, and `lineage`. `mapping` contains `old-id` and optional `new-id`; `lineage` contains `new-id`, `proximal-old-id`, `distal-old-id`, and `distal-fraction` for inserted samples.
+Transformed cells add `transform-report`, `mapping`, and `lineage`. `mapping` contains `old-id` and optional `new-id`; `lineage` contains `new-id`, `proximal-old-id`, `distal-old-id`, and `distal-fraction` for inserted samples. Geometry operations additionally record API class, affine matrix and translation, determinant, radius scale and policy, and whether SWC radius representation is lossy.
 
 == Render Result
 
@@ -1267,7 +1777,7 @@ With `return-report: true`, the renderer returns `body`, `width`, `height`, `can
 - Equivalent-sphere soma display is a visual summary. Only supported soma encodings receive documented area and volume metrics.
 - Scalar color is linear and supports Viridis or Magma. Axodendron does not automatically choose diverging, logarithmic, or categorical maps for a scientific hypothesis.
 - Native and CeTZ labels use exact projected node anchors and explicit offsets; CeTZ `via` points define polylines and `controls` define Bezier curves, but collision-free placement is not automatic.
-- Rendering tests guarantee deterministic SVG structure and broad real-data coverage, not identical raster pixels across PDF engines and fonts.
+- Rendering tests guarantee deterministic SVG structure and broad real-data coverage. An additional fixed-toolchain regression check hashes the exact decoded RGBA dimensions and pixels of a PNG baseline under Typst 0.14.2, so PNG metadata and compression do not create false regressions; this baseline does not claim identical raster output across unrelated PDF engines, fonts, or operating systems.
 
 = License, Dependencies, and Data Citations
 
@@ -1276,6 +1786,8 @@ Axodendron source is distributed under the MIT license. The compiled WASM includ
 The four real SWC files used throughout this manual remain CC BY 4.0 material. Their per-file record links, archive names, original studies, and SHA-256 checksums are recorded in `THIRD_PARTY_NOTICES.md`. Every rendered occurrence in this manual also carries an adjacent attribution line.
 
 When reusing a real-data figure, preserve its adjacent attribution, cite the original study, cite NeuroMorpho.Org with RRID:SCR_002145, and follow the NeuroMorpho.Org terms of use. The database citation used by this manual is Tecuatl C, Ljungquist B, Ascoli GA (2024), _Accelerating the continuous community sharing of digital neuromorphology data_, FASEB BioAdvances 6(7):207-221, #link("https://doi.org/10.1096/fba.2024-00048")[doi:10.1096/fba.2024-00048].
+
+Metric fixtures are recomputed against NeuroM 4.0.5's #link("https://neurom.readthedocs.io/en/stable/_neurom_build/neurom.features.bifurcation.html")[bifurcation] and #link("https://neurom.readthedocs.io/en/stable/_neurom_build/neurom.features.section.html")[section] functions and L-Measure `Pk_classic`. PyLMeasure 0.2.0 bundles L-Measure 5.0 revision 434 on Linux and Windows and 5.2 revision 510 on macOS; validation rejects any other banner and records both platform versions in the fixture. The committed fixture records upstream callable, native units and values, Axodendron values, tolerance, compatibility class, and every known convention or precision difference. TMD provenance cites Kanari L et al. (2018), _A Topological Representation of Branching Neuronal Morphologies_, Neuroinformatics 16:3–13, #link("https://doi.org/10.1007/s12021-017-9341-1")[doi:10.1007/s12021-017-9341-1]. Diameter-power interpretation follows the recorded exponent rather than treating $p=3/2$ as a universal biological constant.
 
 #info-alert[
   The detailed file-level notice is authoritative for bundled third-party material. This manual summarizes it for figure readers but does not replace `THIRD_PARTY_NOTICES.md`.

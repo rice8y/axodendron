@@ -8,7 +8,7 @@ use crate::model::{Morphology, NodeIx, SomaClass};
 /// Version of the scientific definitions serialized in analysis results.
 pub const DEFINITION_VERSION: &str = "axodendron-morphometrics-1";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AnalysisDomain {
     /// Analyze every node and edge exactly as encoded in the SWC file.
@@ -18,7 +18,7 @@ pub enum AnalysisDomain {
     Neurites,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SectionBoundaryPolicy {
     TopologyOnly,

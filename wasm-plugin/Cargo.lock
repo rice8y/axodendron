@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "axodendron-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ciborium",
  "serde",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "axodendron-svg"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axodendron-core",
  "serde",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "axodendron-typst-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axodendron-core",
  "axodendron-svg",

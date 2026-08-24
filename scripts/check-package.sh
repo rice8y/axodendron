@@ -7,12 +7,14 @@ source_dir="$repository_dir/package"
 package_data=$(mktemp -d "${TMPDIR:-/tmp}/axodendron-package.XXXXXX")
 output_dir=$(mktemp -d "${TMPDIR:-/tmp}/axodendron-package-output.XXXXXX")
 trap 'rm -rf "$package_data" "$output_dir"' EXIT HUP INT TERM
-package_dir="$package_data/typst/packages/preview/axodendron/0.1.0"
+package_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "$source_dir/typst.toml")
+package_dir="$package_data/typst/packages/preview/axodendron/$package_version"
 typst_bin=${TYPST_BIN:-typst}
 
-mkdir -p "$package_dir/docs" "$package_dir/examples/data" "$package_dir/images"
+mkdir -p "$package_dir/docs" "$package_dir/examples/data" "$package_dir/images" "$package_dir/src"
 cp "$source_dir/typst.toml" "$package_dir/typst.toml"
 cp "$source_dir/lib.typ" "$package_dir/lib.typ"
+cp "$source_dir"/src/*.typ "$package_dir/src/"
 cp "$source_dir/plugin.wasm" "$package_dir/plugin.wasm"
 cp "$source_dir/README.md" "$package_dir/README.md"
 cp "$source_dir/LICENSE" "$package_dir/LICENSE"
@@ -46,6 +48,12 @@ TYPST_PACKAGE_PATH="$package_data/typst/packages" "$typst_bin" compile \
   --root "$package_dir" \
   "$package_dir/examples/cetz.typ" \
   "$output_dir/cetz.pdf"
+for example_name in morphometrics topology tmd population; do
+  TYPST_PACKAGE_PATH="$package_data/typst/packages" "$typst_bin" compile \
+    --root "$package_dir" \
+    "$package_dir/examples/$example_name.typ" \
+    "$output_dir/$example_name.pdf"
+done
 
 files=$(find "$package_dir" -type f | sed "s|$package_dir/||" | sort)
 expected='LICENSE
@@ -59,9 +67,13 @@ examples/data/AA0109.CNG.swc
 examples/data/Nr5a1-Cre_Ai14-187777-05-02-01_491392821_m.kp1.swc
 examples/data/Sst-IRES-Cre_Ai14-188740-03-02-01_491119369_m.kp12.swc
 examples/data/Vipr2-IRES2-Cre_Ai14-310513-05-02-01_637021223_m.CNG.swc
+examples/morphometrics.typ
 examples/overview.typ
+examples/population.typ
 examples/readme.typ
 examples/rendering.typ
+examples/tmd.typ
+examples/topology.typ
 images/readme-analysis.png
 images/readme-cetz.png
 images/readme-example.png
@@ -69,6 +81,14 @@ images/readme-overview.png
 images/readme-rendering.png
 lib.typ
 plugin.wasm
+src/analysis.typ
+src/annotations.typ
+src/cetz.typ
+src/population.typ
+src/protocol.typ
+src/rendering.typ
+src/tmd.typ
+src/transforms.typ
 typst.toml'
 if [ "$files" != "$expected" ]; then
   printf 'unexpected package bundle:\n%s\n' "$files" >&2

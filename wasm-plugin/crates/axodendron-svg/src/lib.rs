@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use axodendron_core::{Morphology, Projection, SimplifyOptions, SomaClass, Vec2, Vec3};
+use axodendron_core::{
+    Morphology, Projection, SelectionQuery, Selector, SimplifyOptions, SomaClass, Vec2, Vec3,
+};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SVG_BYTES: usize = 64 * 1024 * 1024;
@@ -269,6 +271,99 @@ pub struct RenderReport {
     pub overlay_node_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TreeDepth {
+    #[default]
+    Topological,
+    PathLength,
+    RadialDistance,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeRenderOptions {
+    #[serde(
+        default = "default_width",
+        deserialize_with = "axodendron_core::serde_number::f64"
+    )]
+    pub width: f64,
+    #[serde(
+        default = "default_height",
+        deserialize_with = "axodendron_core::serde_number::f64"
+    )]
+    pub height: f64,
+    #[serde(
+        default = "default_padding",
+        deserialize_with = "axodendron_core::serde_number::f64"
+    )]
+    pub padding: f64,
+    #[serde(
+        default = "default_stroke",
+        deserialize_with = "axodendron_core::serde_number::f64"
+    )]
+    pub stroke_width: f64,
+    #[serde(
+        default = "default_tree_node_radius",
+        deserialize_with = "axodendron_core::serde_number::f64"
+    )]
+    pub node_radius: f64,
+    #[serde(default)]
+    pub depth: TreeDepth,
+    #[serde(default)]
+    pub selection: SelectionQuery,
+    #[serde(default)]
+    pub color: ColorMode,
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub include_nodes: bool,
+    #[serde(default)]
+    pub overlay_node_ids: Vec<i64>,
+    #[serde(default = "default_true")]
+    pub strict_overlay_ids: bool,
+}
+
+impl Default for TreeRenderOptions {
+    fn default() -> Self {
+        Self {
+            width: default_width(),
+            height: default_height(),
+            padding: default_padding(),
+            stroke_width: default_stroke(),
+            node_radius: default_tree_node_radius(),
+            depth: TreeDepth::default(),
+            selection: SelectionQuery::default(),
+            color: ColorMode::default(),
+            background: None,
+            include_nodes: false,
+            overlay_node_ids: Vec::new(),
+            strict_overlay_ids: true,
+        }
+    }
+}
+
+const fn default_tree_node_radius() -> f64 {
+    2.5
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TreeRenderReport {
+    pub depth: TreeDepth,
+    pub edge_length_semantics: String,
+    pub leaf_order_rule: String,
+    pub selection_fingerprint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TreeSvgDocument {
+    pub svg: String,
+    pub nodes: Vec<ProjectedNode>,
+    pub rendered_node_count: u32,
+    pub source_node_count: u32,
+    pub report: TreeRenderReport,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderError {
     InvalidCanvas,
@@ -286,6 +381,7 @@ pub enum RenderError {
     InvalidStyle,
     OutputTooLarge,
     EmptyMorphology,
+    InvalidSelection(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -327,8 +423,227 @@ impl std::fmt::Display for RenderError {
                 "SVG output exceeds the {MAX_SVG_BYTES}-byte renderer limit"
             ),
             Self::EmptyMorphology => f.write_str("cannot render an empty morphology"),
+            Self::InvalidSelection(message) => write!(f, "invalid tree selection: {message}"),
         }
     }
+}
+
+/// Render an abstract rooted forest. Strahler and branch orders are deliberately
+/// not accepted as continuous depth axes; pass them through `color` instead.
+pub fn render_tree_svg(
+    morphology: &Morphology,
+    options: &TreeRenderOptions,
+) -> Result<TreeSvgDocument, RenderError> {
+    if !options.width.is_finite()
+        || !options.height.is_finite()
+        || !options.padding.is_finite()
+        || !options.stroke_width.is_finite()
+        || !options.node_radius.is_finite()
+        || options.width <= 2.0 * options.padding
+        || options.height <= 2.0 * options.padding
+        || options.padding < 0.0
+        || options.stroke_width <= 0.0
+        || options.node_radius <= 0.0
+    {
+        return Err(RenderError::InvalidCanvas);
+    }
+    if options
+        .background
+        .as_deref()
+        .is_some_and(|value| !valid_style_text(value))
+    {
+        return Err(RenderError::InvalidStyle);
+    }
+    let selection = morphology
+        .query_nodes(&options.selection, Selector::All)
+        .map_err(|error| RenderError::InvalidSelection(error.to_string()))?;
+    let selected: std::collections::HashSet<i64> = selection.node_ids.iter().copied().collect();
+    let included: Vec<bool> = morphology
+        .ids()
+        .iter()
+        .map(|id| selected.contains(id))
+        .collect();
+    let roots: Vec<usize> = included
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(ix, keep)| {
+            let parent = morphology.parents_raw()[ix];
+            (keep && (parent == axodendron_core::NONE_NODE || !included[parent as usize]))
+                .then_some(ix)
+        })
+        .collect();
+    let mut children = vec![Vec::<usize>::new(); morphology.len()];
+    for (child, parent) in morphology.parents_raw().iter().copied().enumerate() {
+        if included[child] && parent != axodendron_core::NONE_NODE && included[parent as usize] {
+            children[parent as usize].push(child);
+        }
+    }
+
+    let mut depth = vec![0.0; morphology.len()];
+    for root in &roots {
+        let origin = morphology.positions()[*root];
+        let mut stack = vec![*root];
+        while let Some(parent) = stack.pop() {
+            for child in children[parent].iter().copied().rev() {
+                depth[child] = match options.depth {
+                    TreeDepth::Topological => depth[parent] + 1.0,
+                    TreeDepth::PathLength => {
+                        depth[parent]
+                            + morphology.positions()[parent].distance(morphology.positions()[child])
+                    }
+                    TreeDepth::RadialDistance => morphology.positions()[child].distance(origin),
+                };
+                stack.push(child);
+            }
+        }
+    }
+
+    let mut horizontal = vec![0.0; morphology.len()];
+    let mut next_leaf = 0.0;
+    for root in &roots {
+        let mut stack = vec![(*root, false)];
+        while let Some((node, visited)) = stack.pop() {
+            if !visited {
+                stack.push((node, true));
+                for child in children[node].iter().copied().rev() {
+                    stack.push((child, false));
+                }
+            } else if children[node].is_empty() {
+                horizontal[node] = next_leaf;
+                next_leaf += 1.0;
+            } else {
+                horizontal[node] = children[node]
+                    .iter()
+                    .map(|child| horizontal[*child])
+                    .sum::<f64>()
+                    / children[node].len() as f64;
+            }
+        }
+        next_leaf += 1.0;
+    }
+    let selected_indices: Vec<usize> = included
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(ix, value)| value.then_some(ix))
+        .collect();
+    let min_x = selected_indices
+        .iter()
+        .map(|ix| horizontal[*ix])
+        .fold(f64::INFINITY, f64::min);
+    let max_x = selected_indices
+        .iter()
+        .map(|ix| horizontal[*ix])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = selected_indices
+        .iter()
+        .map(|ix| depth[*ix])
+        .fold(f64::INFINITY, f64::min);
+    let max_y = selected_indices
+        .iter()
+        .map(|ix| depth[*ix])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let span_x = (max_x - min_x).max(1.0);
+    let span_y = (max_y - min_y).max(1.0);
+    let screen: Vec<Vec2> = (0..morphology.len())
+        .map(|ix| {
+            Vec2::new(
+                options.padding
+                    + (horizontal[ix] - min_x) / span_x * (options.width - 2.0 * options.padding),
+                options.padding
+                    + (depth[ix] - min_y) / span_y * (options.height - 2.0 * options.padding),
+            )
+        })
+        .collect();
+    let scalar = scalar_colors(&options.color, morphology)?;
+    let mut svg = String::new();
+    write!(
+        svg,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" role=\"img\" aria-label=\"Neuronal topology tree\">",
+        number(options.width),
+        number(options.height),
+        number(options.width),
+        number(options.height)
+    )
+    .unwrap();
+    svg.push_str("<metadata>Generated by Axodendron; abstract topology layout</metadata>");
+    if let Some(background) = &options.background {
+        write!(
+            svg,
+            "<rect width=\"100%\" height=\"100%\" fill=\"{}\"/>",
+            escape_xml(background)
+        )
+        .unwrap();
+    }
+    svg.push_str("<g fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\">");
+    for child in &selected_indices {
+        let parent = morphology.parents_raw()[*child];
+        if parent == axodendron_core::NONE_NODE || !included[parent as usize] {
+            continue;
+        }
+        let color = node_color(morphology, *child, &options.color, &scalar);
+        write_line(
+            &mut svg,
+            screen[parent as usize],
+            screen[*child],
+            &color,
+            options.stroke_width,
+            Some(morphology.ids()[*child]),
+        );
+    }
+    svg.push_str("</g>");
+    if options.include_nodes {
+        for ix in &selected_indices {
+            let color = node_color(morphology, *ix, &options.color, &scalar);
+            write_circle(
+                &mut svg,
+                screen[*ix],
+                options.node_radius,
+                &color,
+                None,
+                0.0,
+                Some(morphology.ids()[*ix]),
+            );
+        }
+    }
+    svg.push_str("</svg>");
+    ensure_svg_budget(&svg)?;
+
+    let overlay: std::collections::HashSet<i64> =
+        options.overlay_node_ids.iter().copied().collect();
+    if options.strict_overlay_ids {
+        if let Some(id) = overlay.iter().find(|id| !selected.contains(id)) {
+            return Err(RenderError::UnknownOverlayNode(*id));
+        }
+    }
+    let nodes = selected_indices
+        .iter()
+        .filter(|ix| options.include_nodes || overlay.contains(&morphology.ids()[**ix]))
+        .map(|ix| ProjectedNode {
+            node_id: morphology.ids()[*ix],
+            x: screen[*ix].x,
+            y: screen[*ix].y,
+            depth: depth[*ix],
+        })
+        .collect();
+    Ok(TreeSvgDocument {
+        svg,
+        nodes,
+        rendered_node_count: selected_indices.len() as u32,
+        source_node_count: morphology.len() as u32,
+        report: TreeRenderReport {
+            depth: options.depth,
+            edge_length_semantics: match options.depth {
+                TreeDepth::Topological => "one-unit-per-selected-edge",
+                TreeDepth::PathLength => "selected-edge-path-length",
+                TreeDepth::RadialDistance => "euclidean-distance-from-selected-arbor-root",
+            }
+            .to_owned(),
+            leaf_order_rule: "stable-input-child-order-with-one-gap-between-roots".to_owned(),
+            selection_fingerprint: selection.selection_fingerprint,
+        },
+    })
 }
 
 impl std::error::Error for RenderError {}
@@ -1816,5 +2131,43 @@ mod tests {
         assert!(document.svg.contains("<circle"));
         assert!(document.svg.contains("stroke=\"#ffffff\""));
         assert!(document.svg.contains("stroke-width=\"2.5\""));
+    }
+
+    #[test]
+    fn topology_renderer_uses_only_supported_continuous_depth_semantics() {
+        let morphology = parse_swc(
+            "1 1 0 0 0 1 -1\n2 3 1 0 0 1 1\n3 3 2 0 0 1 2\n4 3 1 2 0 1 2\n",
+            ValidationProfile::IncfStrict,
+        )
+        .morphology
+        .unwrap();
+        let options = TreeRenderOptions {
+            depth: TreeDepth::PathLength,
+            include_nodes: true,
+            selection: SelectionQuery {
+                domain: axodendron_core::AnalysisDomain::Neurites,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document = render_tree_svg(&morphology, &options).unwrap();
+        assert!(document.svg.contains("abstract topology layout"));
+        assert_eq!(document.report.depth, TreeDepth::PathLength);
+        assert_eq!(
+            document.report.edge_length_semantics,
+            "selected-edge-path-length"
+        );
+        assert_eq!(document.rendered_node_count, 3);
+        let branch = document
+            .nodes
+            .iter()
+            .find(|node| node.node_id == 2)
+            .unwrap();
+        let leaf = document
+            .nodes
+            .iter()
+            .find(|node| node.node_id == 3)
+            .unwrap();
+        assert!(leaf.y > branch.y);
     }
 }

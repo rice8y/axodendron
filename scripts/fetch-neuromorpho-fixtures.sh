@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 manifest="$repository_dir/wasm-plugin/test-data/neuromorpho-cases.tsv"
 cache_dir=${AXODENDRON_NEUROMORPHO_DIR:-"$repository_dir/target/neuromorpho"}
-user_agent='Axodendron quality tests/0.1 (+https://github.com/rice8y/axodendron)'
+user_agent='Axodendron quality tests/0.1.1 (+https://github.com/rice8y/axodendron)'
 
 mkdir -p "$cache_dir"
 cache_dir=$(CDPATH= cd -- "$cache_dir" && pwd)

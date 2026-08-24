@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geometry::Vec3;
 use crate::model::{Morphology, NONE_NODE, NodeId, NodeIx};
+use crate::principal::PrincipalFrame;
 use crate::swc::MAX_NODE_COUNT;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,6 +57,34 @@ pub struct TransformReport {
     pub result_cable_length: f64,
     pub cable_length_change: f64,
     pub guaranteed_max_deviation: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<GeometryTransformProvenance>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Affine3 {
+    pub matrix: [[f64; 3]; 3],
+    pub translation: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AffineRadiusPolicy {
+    #[default]
+    Preserve,
+    VolumeEquivalent,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GeometryTransformProvenance {
+    pub api_class: String,
+    pub matrix: [[f64; 3]; 3],
+    pub translation: Vec3,
+    pub determinant: f64,
+    pub radius_scale: f64,
+    pub radius_policy: String,
+    pub radius_representation_lossy: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -96,6 +125,11 @@ pub enum TransformError {
     InvalidStep,
     IdSpaceExhausted,
     NodeLimitExceeded,
+    InvalidGeometryTransform,
+    InvalidRotationAxis,
+    InvalidScale,
+    NonFiniteResult,
+    DegeneratePrincipalFrame,
 }
 
 impl std::fmt::Display for TransformError {
@@ -117,6 +151,19 @@ impl std::fmt::Display for TransformError {
                 f,
                 "resampling would exceed the {MAX_NODE_COUNT}-node morphology limit"
             ),
+            Self::InvalidGeometryTransform => f.write_str(
+                "affine matrix and translation must be finite and the matrix must be non-singular",
+            ),
+            Self::InvalidRotationAxis => {
+                f.write_str("rotation or reflection axis must be finite and non-zero")
+            }
+            Self::InvalidScale => f.write_str("uniform scale must be finite and positive"),
+            Self::NonFiniteResult => {
+                f.write_str("geometry transform produced a non-finite coordinate or radius")
+            }
+            Self::DegeneratePrincipalFrame => f.write_str(
+                "principal-frame alignment is ambiguous under the configured degeneracy tolerance",
+            ),
         }
     }
 }
@@ -124,6 +171,175 @@ impl std::fmt::Display for TransformError {
 impl std::error::Error for TransformError {}
 
 impl Morphology {
+    /// Apply a translation. This is an exactly SWC-compatible transform.
+    pub fn translate_with_report(&self, offset: Vec3) -> Result<TransformResult, TransformError> {
+        compatible_geometry_transform(
+            self,
+            Affine3 {
+                matrix: identity_matrix(),
+                translation: offset,
+            },
+            1.0,
+            "translate",
+        )
+    }
+
+    /// Apply a right-handed axis-angle rotation about `center`.
+    pub fn rotate_with_report(
+        &self,
+        axis: Vec3,
+        angle_radians: f64,
+        center: Vec3,
+    ) -> Result<TransformResult, TransformError> {
+        let axis = axis
+            .normalized()
+            .ok_or(TransformError::InvalidRotationAxis)?;
+        if !angle_radians.is_finite() || !finite_vec3(center) {
+            return Err(TransformError::InvalidGeometryTransform);
+        }
+        let (s, c) = angle_radians.sin_cos();
+        let k = 1.0 - c;
+        let matrix = [
+            [
+                c + axis.x * axis.x * k,
+                axis.x * axis.y * k - axis.z * s,
+                axis.x * axis.z * k + axis.y * s,
+            ],
+            [
+                axis.y * axis.x * k + axis.z * s,
+                c + axis.y * axis.y * k,
+                axis.y * axis.z * k - axis.x * s,
+            ],
+            [
+                axis.z * axis.x * k - axis.y * s,
+                axis.z * axis.y * k + axis.x * s,
+                c + axis.z * axis.z * k,
+            ],
+        ];
+        compatible_geometry_transform(
+            self,
+            Affine3 {
+                matrix,
+                translation: center - apply_matrix(matrix, center),
+            },
+            1.0,
+            "rotate",
+        )
+    }
+
+    /// Apply a uniform coordinate and radius scale about `center`.
+    pub fn uniform_scale_with_report(
+        &self,
+        factor: f64,
+        center: Vec3,
+    ) -> Result<TransformResult, TransformError> {
+        if !factor.is_finite() || factor <= 0.0 || !finite_vec3(center) {
+            return Err(TransformError::InvalidScale);
+        }
+        let matrix = [[factor, 0.0, 0.0], [0.0, factor, 0.0], [0.0, 0.0, factor]];
+        compatible_geometry_transform(
+            self,
+            Affine3 {
+                matrix,
+                translation: center - apply_matrix(matrix, center),
+            },
+            factor,
+            "uniform-scale",
+        )
+    }
+
+    /// Reflect across a plane passing through `point` with the given normal.
+    pub fn reflect_with_report(
+        &self,
+        normal: Vec3,
+        point: Vec3,
+    ) -> Result<TransformResult, TransformError> {
+        let n = normal
+            .normalized()
+            .ok_or(TransformError::InvalidRotationAxis)?;
+        if !finite_vec3(point) {
+            return Err(TransformError::InvalidGeometryTransform);
+        }
+        let matrix = [
+            [1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y, -2.0 * n.x * n.z],
+            [-2.0 * n.y * n.x, 1.0 - 2.0 * n.y * n.y, -2.0 * n.y * n.z],
+            [-2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z],
+        ];
+        compatible_geometry_transform(
+            self,
+            Affine3 {
+                matrix,
+                translation: point - apply_matrix(matrix, point),
+            },
+            1.0,
+            "reflect",
+        )
+    }
+
+    /// Express coordinates in a previously computed principal frame.
+    pub fn align_to_principal_frame_with_report(
+        &self,
+        frame: &PrincipalFrame,
+        allow_degenerate: bool,
+    ) -> Result<TransformResult, TransformError> {
+        if frame.morphology_fingerprint != self.fingerprint() {
+            return Err(TransformError::InvalidGeometryTransform);
+        }
+        if !allow_degenerate && frame.ambiguous_axes.iter().any(|value| *value) {
+            return Err(TransformError::DegeneratePrincipalFrame);
+        }
+        let matrix = [
+            frame.axes[0].to_array(),
+            frame.axes[1].to_array(),
+            frame.axes[2].to_array(),
+        ];
+        compatible_geometry_transform(
+            self,
+            Affine3 {
+                matrix,
+                translation: apply_matrix(matrix, frame.origin) * -1.0,
+            },
+            1.0,
+            "principal-align",
+        )
+    }
+
+    /// Apply a general invertible affine transform to SWC centerline points.
+    ///
+    /// A non-similarity affine map turns circular cross-sections into ellipses,
+    /// which SWC cannot encode. The explicit radius policy therefore always
+    /// records a lossy representation in the transform report.
+    pub fn affine_with_report(
+        &self,
+        affine: Affine3,
+        radius_policy: AffineRadiusPolicy,
+    ) -> Result<TransformResult, TransformError> {
+        validate_affine(affine)?;
+        let determinant = determinant(affine.matrix);
+        let radius_scale = match radius_policy {
+            AffineRadiusPolicy::Preserve => 1.0,
+            AffineRadiusPolicy::VolumeEquivalent => determinant.abs().cbrt(),
+        };
+        geometry_transform(
+            self,
+            affine,
+            radius_scale,
+            "general-affine",
+            GeometryTransformProvenance {
+                api_class: "general-affine".to_owned(),
+                matrix: affine.matrix,
+                translation: affine.translation,
+                determinant,
+                radius_scale,
+                radius_policy: match radius_policy {
+                    AffineRadiusPolicy::Preserve => "preserve".to_owned(),
+                    AffineRadiusPolicy::VolumeEquivalent => "volume-equivalent".to_owned(),
+                },
+                radius_representation_lossy: true,
+            },
+        )
+    }
+
     /// Select exactly the requested node IDs. Parent edges are retained only
     /// when both endpoints are selected; no synthetic bridging edge is added.
     pub fn select_nodes(&self, node_ids: &[i64]) -> Result<Self, TransformError> {
@@ -685,11 +901,114 @@ fn build_transform_result(
             result_cable_length,
             cable_length_change: result_cable_length - source_cable_length,
             guaranteed_max_deviation,
+            geometry: None,
         },
         morphology,
         mapping,
         lineage,
     }
+}
+
+fn compatible_geometry_transform(
+    morphology: &Morphology,
+    affine: Affine3,
+    radius_scale: f64,
+    operation: &str,
+) -> Result<TransformResult, TransformError> {
+    validate_affine(affine)?;
+    geometry_transform(
+        morphology,
+        affine,
+        radius_scale,
+        operation,
+        GeometryTransformProvenance {
+            api_class: "swc-compatible".to_owned(),
+            matrix: affine.matrix,
+            translation: affine.translation,
+            determinant: determinant(affine.matrix),
+            radius_scale,
+            radius_policy: "exact-circular-radius".to_owned(),
+            radius_representation_lossy: false,
+        },
+    )
+}
+
+fn geometry_transform(
+    source: &Morphology,
+    affine: Affine3,
+    radius_scale: f64,
+    operation: &str,
+    provenance: GeometryTransformProvenance,
+) -> Result<TransformResult, TransformError> {
+    let positions: Vec<Vec3> = source
+        .positions()
+        .iter()
+        .copied()
+        .map(|point| apply_matrix(affine.matrix, point) + affine.translation)
+        .collect();
+    let radii: Vec<f64> = source
+        .radii()
+        .iter()
+        .map(|radius| radius * radius_scale)
+        .collect();
+    if positions.iter().any(|point| !finite_vec3(*point))
+        || radii.iter().any(|radius| !radius.is_finite())
+    {
+        return Err(TransformError::NonFiniteResult);
+    }
+    let morphology = Morphology::from_parts(
+        source.ids().to_vec(),
+        source.kinds().to_vec(),
+        positions,
+        radii,
+        source.parents_raw().to_vec(),
+        source.source_lines().to_vec(),
+        source.units().to_owned(),
+        source.source_fingerprint().map(str::to_owned),
+        source.metadata().clone(),
+    );
+    let mut result =
+        build_transform_result(source, morphology, operation, Vec::new(), Vec::new(), None);
+    result.report.geometry = Some(provenance);
+    Ok(result)
+}
+
+fn validate_affine(affine: Affine3) -> Result<(), TransformError> {
+    if !affine
+        .matrix
+        .iter()
+        .flatten()
+        .all(|value| value.is_finite())
+        || !finite_vec3(affine.translation)
+        || !determinant(affine.matrix).is_finite()
+        || determinant(affine.matrix).abs() <= 64.0 * f64::EPSILON
+    {
+        Err(TransformError::InvalidGeometryTransform)
+    } else {
+        Ok(())
+    }
+}
+
+fn finite_vec3(value: Vec3) -> bool {
+    value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
+}
+
+fn identity_matrix() -> [[f64; 3]; 3] {
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+}
+
+fn apply_matrix(matrix: [[f64; 3]; 3], value: Vec3) -> Vec3 {
+    Vec3::new(
+        matrix[0][0] * value.x + matrix[0][1] * value.y + matrix[0][2] * value.z,
+        matrix[1][0] * value.x + matrix[1][1] * value.y + matrix[1][2] * value.z,
+        matrix[2][0] * value.x + matrix[2][1] * value.y + matrix[2][2] * value.z,
+    )
+}
+
+fn determinant(matrix: [[f64; 3]; 3]) -> f64 {
+    matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
 }
 
 fn raw_cable_length(morphology: &Morphology) -> f64 {
@@ -816,7 +1135,9 @@ fn point_segment_distance(point: Vec3, a: Vec3, b: Vec3) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{NodeId, SimplifyOptions, ValidationProfile, parse_swc};
+    use crate::{
+        Affine3, AffineRadiusPolicy, NodeId, SimplifyOptions, ValidationProfile, Vec3, parse_swc,
+    };
 
     use super::{MAX_NODE_COUNT, ensure_resample_capacity};
 
@@ -937,5 +1258,62 @@ mod tests {
         assert!(permissive.is_valid(), "{:?}", permissive.diagnostics);
         assert_eq!(permissive.morphology.unwrap().roots().count(), 2);
         assert!(!parse_swc(&exported_forest.source, ValidationProfile::IncfStrict).is_valid());
+    }
+
+    #[test]
+    fn compatible_geometry_transforms_preserve_topology_and_radius_semantics() {
+        let source = morphology();
+        let translated = source
+            .translate_with_report(Vec3::new(10.0, -2.0, 3.0))
+            .unwrap();
+        assert_eq!(
+            translated.morphology.topology_fingerprint(),
+            source.topology_fingerprint()
+        );
+        assert_eq!(translated.morphology.radii(), source.radii());
+        assert!(
+            !translated
+                .report
+                .geometry
+                .as_ref()
+                .unwrap()
+                .radius_representation_lossy
+        );
+
+        let scaled = source
+            .uniform_scale_with_report(2.0, Vec3::default())
+            .unwrap();
+        assert_eq!(scaled.morphology.radii()[0], source.radii()[0] * 2.0);
+        assert!(
+            (scaled.report.result_cable_length - 2.0 * scaled.report.source_cable_length).abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn general_affine_requires_an_explicit_lossy_radius_policy() {
+        let source = morphology();
+        let transformed = source
+            .affine_with_report(
+                Affine3 {
+                    matrix: [[2.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.0]],
+                    translation: Vec3::default(),
+                },
+                AffineRadiusPolicy::VolumeEquivalent,
+            )
+            .unwrap();
+        let provenance = transformed.report.geometry.unwrap();
+        assert!(provenance.radius_representation_lossy);
+        assert!((provenance.radius_scale - 24.0_f64.cbrt()).abs() < 1e-12);
+        assert_eq!(
+            source.affine_with_report(
+                Affine3 {
+                    matrix: [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                    translation: Vec3::default(),
+                },
+                AffineRadiusPolicy::Preserve,
+            ),
+            Err(crate::TransformError::InvalidGeometryTransform)
+        );
     }
 }
