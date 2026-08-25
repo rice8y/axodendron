@@ -41,8 +41,8 @@ if strings package/plugin.wasm | grep -E '/Users/|/home/|\.cargo/registry' >/dev
 fi
 
 size=$(wc -c < package/plugin.wasm | tr -d ' ')
-if [ "$size" -gt 1310720 ]; then
-  printf 'plugin.wasm exceeds the 1.25 MiB release budget: %s bytes\n' "$size" >&2
+if [ "$size" -gt 1048576 ]; then
+  printf 'plugin.wasm exceeds the 1 MiB release budget: %s bytes\n' "$size" >&2
   exit 1
 fi
 

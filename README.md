@@ -224,7 +224,7 @@ Typst sources live directly under [`package/examples/`](package/examples/), whil
 
 ## Development
 
-Install Rust with the `wasm32-unknown-unknown` target, Typst 0.14.0 or newer, and `wasm-tools`, then run from the repository root:
+Install Rust with the `wasm32-unknown-unknown` target, Typst 0.14.0 or newer, Binaryen 132, and `wasm-tools`, then run from the repository root:
 
 ```sh
 ./scripts/check.sh
